@@ -1,0 +1,36 @@
+{
+  "name": "@zeroflow/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings=0"
+  },
+  "dependencies": {
+    "@remotion/player": "^4.0.474",
+    "@tldraw/tlschema": "5.1.0",
+    "@zeroflow/core": "workspace:*",
+    "@zeroflow/db": "workspace:*",
+    "@zeroflow/providers": "workspace:*",
+    "@zeroflow/remotion-video": "workspace:*",
+    "d3-array": "^3.2.4",
+    "d3-hierarchy": "^3.1.2",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "next": "^15.3.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "three": "^0.184.0",
+    "tldraw": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/three": "^0.184.1"
+  }
+}

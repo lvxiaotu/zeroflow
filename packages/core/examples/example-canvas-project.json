@@ -1,0 +1,297 @@
+{
+  "id": "project-ascendant-intro",
+  "title": "上升星座到底是什么？",
+  "topic": "用 45 秒给占星小白解释上升星座",
+  "status": "draft",
+  "spec": {
+    "version": "1",
+    "title": "上升星座到底是什么？",
+    "format": "portrait",
+    "fps": 30,
+    "stylePresetId": "style-astro-teaching-default",
+    "templateId": "template-concept-explainer",
+    "scenes": [
+      {
+        "id": "scene-1",
+        "type": "text",
+        "title": "开场问题",
+        "narration": "你有没有发现，有些人一出现，就会给人很鲜明的第一印象？",
+        "durationSec": 6,
+        "transition": "fade",
+        "headline": "第一印象来自哪里？",
+        "caption": {
+          "text": "第一印象来自哪里？",
+          "yPercent": 78,
+          "fontSize": 48,
+          "color": "#ffffff",
+          "animation": "rise"
+        },
+        "voice": {
+          "voiceProfileAssetId": "asset-voice-soft-teacher",
+          "speed": 1,
+          "volume": 1,
+          "emotion": "warm"
+        }
+      },
+      {
+        "id": "scene-2",
+        "type": "astro-chart",
+        "title": "上升点定义",
+        "narration": "上升星座，就是你出生那一刻，东方地平线上正在升起的星座。",
+        "durationSec": 10,
+        "transition": "zoom",
+        "chartId": "chart-ascendant-demo",
+        "highlights": [
+          {
+            "kind": "zodiac",
+            "id": "ascendant",
+            "label": "上升点"
+          }
+        ],
+        "caption": {
+          "text": "东方地平线上升起的星座",
+          "yPercent": 74,
+          "fontSize": 44,
+          "color": "#ffffff",
+          "animation": "fade"
+        }
+      },
+      {
+        "id": "scene-3",
+        "type": "sketch",
+        "title": "生活化比喻",
+        "narration": "你可以把它理解成一个人走进世界时，最先被别人看到的打开方式。",
+        "durationSec": 9,
+        "transition": "wipe",
+        "prompt": "simple line drawing, a person opening a door into a starry room, astrology teaching style",
+        "assetId": "asset-sketch-doorway",
+        "caption": {
+          "text": "它像你走进世界的开场方式",
+          "yPercent": 80,
+          "fontSize": 44,
+          "color": "#ffffff",
+          "animation": "rise"
+        }
+      }
+    ],
+    "audio": {
+      "tracks": [
+        {
+          "id": "track-narration",
+          "assetId": "asset-narration-ascendant-intro",
+          "assetScope": "project",
+          "kind": "narration",
+          "startSec": 0,
+          "volume": 1
+        },
+        {
+          "id": "track-bgm",
+          "assetId": "asset-bgm-soft-celestial",
+          "assetScope": "library",
+          "kind": "music",
+          "startSec": 0,
+          "volume": 0.24
+        }
+      ]
+    }
+  },
+  "canvas": {
+    "version": "1",
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "zoom": 1
+    },
+    "nodes": [
+      {
+        "id": "node-topic",
+        "kind": "topic",
+        "refId": "project-ascendant-intro",
+        "position": { "x": 80, "y": 80 },
+        "size": { "width": 240, "height": 140 },
+        "status": "ready",
+        "data": {
+          "topic": "用 45 秒给占星小白解释上升星座"
+        }
+      },
+      {
+        "id": "node-script",
+        "kind": "script",
+        "refId": "script-draft-ascendant-intro",
+        "position": { "x": 380, "y": 80 },
+        "size": { "width": 300, "height": 180 },
+        "status": "ready",
+        "data": {
+          "targetDurationSec": 45,
+          "tone": "warm beginner-friendly"
+        }
+      },
+      {
+        "id": "node-storyboard",
+        "kind": "storyboard",
+        "position": { "x": 740, "y": 80 },
+        "size": { "width": 260, "height": 160 },
+        "status": "ready",
+        "data": {
+          "sceneCount": 3
+        }
+      },
+      {
+        "id": "node-scene-1",
+        "kind": "scene",
+        "refId": "scene-1",
+        "position": { "x": 80, "y": 330 },
+        "size": { "width": 260, "height": 180 },
+        "status": "ready",
+        "data": {
+          "durationSec": 6
+        }
+      },
+      {
+        "id": "node-caption-1",
+        "kind": "caption",
+        "refId": "scene-1",
+        "position": { "x": 80, "y": 550 },
+        "size": { "width": 260, "height": 130 },
+        "status": "ready",
+        "data": {
+          "yPercent": 78,
+          "fontSize": 48
+        }
+      },
+      {
+        "id": "node-voice",
+        "kind": "voice",
+        "refId": "asset-voice-soft-teacher",
+        "position": { "x": 380, "y": 330 },
+        "size": { "width": 260, "height": 140 },
+        "status": "ready",
+        "data": {
+          "speed": 1,
+          "volume": 1
+        }
+      },
+      {
+        "id": "node-chart",
+        "kind": "chart",
+        "refId": "chart-ascendant-demo",
+        "position": { "x": 680, "y": 330 },
+        "size": { "width": 260, "height": 160 },
+        "status": "ready",
+        "data": {
+          "highlight": "ascendant"
+        }
+      },
+      {
+        "id": "node-image",
+        "kind": "image",
+        "refId": "asset-sketch-doorway",
+        "position": { "x": 980, "y": 330 },
+        "size": { "width": 260, "height": 160 },
+        "status": "ready",
+        "data": {
+          "prompt": "person opening a door into a starry room"
+        }
+      },
+      {
+        "id": "node-preview",
+        "kind": "preview",
+        "position": { "x": 380, "y": 570 },
+        "size": { "width": 280, "height": 170 },
+        "status": "idle",
+        "data": {
+          "renderer": "remotion"
+        }
+      },
+      {
+        "id": "node-export",
+        "kind": "export",
+        "position": { "x": 720, "y": 570 },
+        "size": { "width": 240, "height": 150 },
+        "status": "idle",
+        "data": {
+          "format": "mp4"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-topic-script",
+        "fromNodeId": "node-topic",
+        "toNodeId": "node-script",
+        "relation": "produces"
+      },
+      {
+        "id": "edge-script-storyboard",
+        "fromNodeId": "node-script",
+        "toNodeId": "node-storyboard",
+        "relation": "produces"
+      },
+      {
+        "id": "edge-storyboard-scene-1",
+        "fromNodeId": "node-storyboard",
+        "toNodeId": "node-scene-1",
+        "relation": "produces"
+      },
+      {
+        "id": "edge-scene-caption-1",
+        "fromNodeId": "node-scene-1",
+        "toNodeId": "node-caption-1",
+        "relation": "uses"
+      },
+      {
+        "id": "edge-scene-voice",
+        "fromNodeId": "node-scene-1",
+        "toNodeId": "node-voice",
+        "relation": "uses"
+      },
+      {
+        "id": "edge-chart-preview",
+        "fromNodeId": "node-chart",
+        "toNodeId": "node-preview",
+        "relation": "renders"
+      },
+      {
+        "id": "edge-image-preview",
+        "fromNodeId": "node-image",
+        "toNodeId": "node-preview",
+        "relation": "renders"
+      },
+      {
+        "id": "edge-preview-export",
+        "fromNodeId": "node-preview",
+        "toNodeId": "node-export",
+        "relation": "produces"
+      }
+    ]
+  },
+  "assetRefs": [
+    {
+      "assetId": "asset-narration-ascendant-intro",
+      "assetScope": "project",
+      "usage": "narration",
+      "canvasNodeId": "node-voice"
+    },
+    {
+      "assetId": "asset-bgm-soft-celestial",
+      "assetScope": "library",
+      "usage": "background"
+    },
+    {
+      "assetId": "asset-chart-style-default",
+      "assetScope": "library",
+      "usage": "chart",
+      "sceneId": "scene-2",
+      "canvasNodeId": "node-chart"
+    },
+    {
+      "assetId": "asset-sketch-doorway",
+      "assetScope": "project",
+      "usage": "scene",
+      "sceneId": "scene-3",
+      "canvasNodeId": "node-image"
+    }
+  ],
+  "createdAt": "2026-06-08T00:00:00.000Z",
+  "updatedAt": "2026-06-08T00:00:00.000Z"
+}

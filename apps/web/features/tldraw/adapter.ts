@@ -1,0 +1,381 @@
+"use client";
+
+import type { CanvasDocument, CanvasNode, CanvasNodeKind } from "@zeroflow/core";
+import {
+  createShapeId,
+  toRichText,
+  type Editor,
+  type TLArrowShape,
+  type TLShape,
+  type TLShapeId
+} from "tldraw";
+import { type ZeroFlowNodeShape, zeroFlowNodeShapeType } from "./ZeroFlowNodeShape";
+
+export const nodeShapeMetaKey = "zeroflowNodeId";
+export const edgeShapeMetaKey = "zeroflowEdgeId";
+
+const kindLabels: Record<CanvasNodeKind, string> = {
+  topic: "Topic",
+  script: "Script",
+  storyboard: "Storyboard",
+  scene: "Scene",
+  caption: "Caption",
+  voice: "Voice",
+  chart: "Chart",
+  image: "Image",
+  d3: "D3 Diagram",
+  three: "Three Scene",
+  music: "Music",
+  composition: "Composition",
+  preview: "Preview",
+  export: "Export"
+};
+
+const actionLabels: Partial<Record<CanvasNodeKind, string>> = {
+  topic: "Generate script",
+  script: "Generate storyboard",
+  storyboard: "Generate storyboard",
+  caption: "Align captions",
+  voice: "Generate TTS",
+  chart: "Generate chart",
+  image: "Generate image",
+  composition: "Create preview",
+  preview: "Render still"
+};
+
+export function loadCanvasIntoTldraw(editor: Editor, canvas: CanvasDocument) {
+  editor.store.mergeRemoteChanges(() => {
+    const currentShapes = editor.getCurrentPageShapes();
+
+    if (currentShapes.length > 0) {
+      editor.deleteShapes(currentShapes.map((shape) => shape.id));
+    }
+
+    editor.createShapes(canvas.nodes.map(nodeToZeroFlowNodeShape));
+    syncTldrawEdges(editor, canvas);
+    editor.zoomToFit();
+  });
+}
+
+export function syncTldrawEdges(editor: Editor, canvas: CanvasDocument) {
+  editor.store.mergeRemoteChanges(() => {
+    const shapes = editor.getCurrentPageShapes();
+    const existingEdgeIds = shapes.filter(isZeroFlowArrowShape).map((shape) => shape.id);
+
+    if (existingEdgeIds.length > 0) {
+      editor.deleteShapes(existingEdgeIds);
+    }
+
+    const nodeShapes = new Map<string, ZeroFlowNodeShape>();
+
+    for (const shape of editor.getCurrentPageShapes()) {
+      if (isZeroFlowNodeShape(shape)) {
+        nodeShapes.set(String(shape.meta[nodeShapeMetaKey]), shape);
+      }
+    }
+
+    const edgeShapes = canvas.edges.flatMap((edge) => {
+      const fromShape = nodeShapes.get(edge.fromNodeId);
+      const toShape = nodeShapes.get(edge.toNodeId);
+
+      if (!fromShape || !toShape) {
+        return [];
+      }
+
+      return [edgeToArrowShape(edge.id, edge.relation, fromShape, toShape)];
+    });
+
+    if (edgeShapes.length > 0) {
+      editor.createShapes(edgeShapes);
+    }
+
+    keepEdgesBehindNodes(editor);
+  });
+}
+
+export function canvasFromTldraw(editor: Editor, baseCanvas: CanvasDocument): CanvasDocument {
+  const nodeShapes = new Map<string, ZeroFlowNodeShape>();
+
+  for (const shape of editor.getCurrentPageShapes()) {
+    if (isZeroFlowNodeShape(shape)) {
+      nodeShapes.set(String(shape.meta[nodeShapeMetaKey]), shape);
+    }
+  }
+
+  return {
+    ...baseCanvas,
+    nodes: baseCanvas.nodes.map((node) => {
+      const shape = nodeShapes.get(node.id);
+
+      if (!shape) {
+        return node;
+      }
+
+      return {
+        ...node,
+        position: {
+          x: roundCanvasNumber(shape.x),
+          y: roundCanvasNumber(shape.y)
+        },
+        size: {
+          width: Math.max(120, roundCanvasNumber(shape.props.w)),
+          height: Math.max(88, roundCanvasNumber(shape.props.h))
+        }
+      };
+    })
+  };
+}
+
+export function getSelectedZeroFlowNodeIds(editor: Editor) {
+  return editor
+    .getSelectedShapes()
+    .filter(isZeroFlowNodeShape)
+    .map((shape) => String(shape.meta[nodeShapeMetaKey]));
+}
+
+export function isZeroFlowNodeShape(shape: TLShape): shape is ZeroFlowNodeShape {
+  return shape.type === zeroFlowNodeShapeType && typeof shape.meta[nodeShapeMetaKey] === "string";
+}
+
+export function updateTldrawNodeShape(editor: Editor, node: CanvasNode) {
+  const shape = editor
+    .getCurrentPageShapes()
+    .find((item) => isZeroFlowNodeShape(item) && item.props.nodeId === node.id);
+
+  if (!shape) {
+    return;
+  }
+
+  editor.updateShape({
+    id: shape.id,
+    type: zeroFlowNodeShapeType,
+    props: zeroFlowNodeShapePropsFromNode(node)
+  });
+}
+
+function nodeToZeroFlowNodeShape(node: CanvasNode) {
+  return {
+    id: nodeShapeId(node.id),
+    type: zeroFlowNodeShapeType,
+    x: node.position.x,
+    y: node.position.y,
+    opacity: node.status === "failed" ? 0.7 : 1,
+    props: zeroFlowNodeShapePropsFromNode(node),
+    meta: {
+      [nodeShapeMetaKey]: node.id,
+      zeroflowNodeKind: node.kind
+    }
+  };
+}
+
+function zeroFlowNodeShapePropsFromNode(node: CanvasNode): ZeroFlowNodeShape["props"] {
+  const actionLabel = nodeActionLabel(node);
+  const assetUrl = nodeAssetUrl(node);
+
+  return {
+    w: node.size.width,
+    h: node.size.height,
+    nodeId: node.id,
+    kind: node.kind,
+    status: node.status,
+    title: nodeTitle(node),
+    description: nodeDescription(node),
+    refId: node.refId ?? stringData(node.data.assetId) ?? stringData(node.data.chartAssetId) ?? "",
+    assetUrl,
+    assetKind: nodeAssetKind(node, assetUrl),
+    provider: nodeProvider(node),
+    cueCount: nodeCueCount(node),
+    durationSec: nodeDurationSec(node),
+    actionLabel,
+    hasAction: actionLabel.length > 0
+  };
+}
+
+function nodeActionLabel(node: CanvasNode) {
+  if (node.kind === "export") {
+    return stringData(node.data.exportScope) === "full" ? "Render full video" : "Render clip";
+  }
+
+  return actionLabels[node.kind] ?? "";
+}
+
+function edgeToArrowShape(
+  edgeId: string,
+  relation: string,
+  fromShape: ZeroFlowNodeShape,
+  toShape: ZeroFlowNodeShape
+) {
+  return {
+    id: edgeShapeId(edgeId),
+    type: "arrow" as const,
+    x: 0,
+    y: 0,
+    isLocked: true,
+    opacity: 0.24,
+    props: {
+      start: {
+        x: fromShape.x + fromShape.props.w,
+        y: fromShape.y + fromShape.props.h / 2
+      },
+      end: {
+        x: toShape.x,
+        y: toShape.y + toShape.props.h / 2
+      },
+      arrowheadEnd: "arrow" as const,
+      richText: toRichText("")
+    },
+    meta: {
+      [edgeShapeMetaKey]: edgeId,
+      zeroflowEdgeRelation: relation
+    }
+  };
+}
+
+function isZeroFlowArrowShape(shape: TLShape): shape is TLArrowShape {
+  return shape.type === "arrow" && typeof shape.meta[edgeShapeMetaKey] === "string";
+}
+
+function keepEdgesBehindNodes(editor: Editor) {
+  const shapes = editor.getCurrentPageShapes();
+  const edgeIds = shapes.filter(isZeroFlowArrowShape).map((shape) => shape.id);
+  const nodeIds = shapes.filter(isZeroFlowNodeShape).map((shape) => shape.id);
+
+  if (edgeIds.length > 0) {
+    editor.sendToBack(edgeIds);
+  }
+
+  if (nodeIds.length > 0) {
+    editor.bringToFront(nodeIds);
+  }
+}
+
+function nodeShapeId(nodeId: string): TLShapeId {
+  return createShapeId(`zeroflow-node-${nodeId}`);
+}
+
+function edgeShapeId(edgeId: string): TLShapeId {
+  return createShapeId(`zeroflow-edge-${edgeId}`);
+}
+
+function nodeTitle(node: CanvasNode) {
+  return compactText(stringData(node.data.title) ?? kindLabels[node.kind], 58);
+}
+
+function nodeDescription(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  const candidates = [
+    stringData(node.data.description),
+    stringData(node.data.prompt),
+    stringData(node.data.visualPrompt),
+    stringData(node.data.narration),
+    stringData(node.data.scriptText),
+    typeof node.data.caption === "string" ? node.data.caption : undefined,
+    stringData(caption?.text)
+  ];
+
+  return compactText(candidates.find((value) => value && value.trim().length > 0) ?? "", 140);
+}
+
+function nodeAssetUrl(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  const candidates = [
+    stringData(node.data.assetUrl),
+    stringData(node.data.chartAssetUrl),
+    stringData(node.data.imageAssetUrl),
+    stringData(caption?.assetUrl)
+  ];
+
+  return candidates.find((value) => value && value.length > 0) ?? "";
+}
+
+function nodeAssetKind(node: CanvasNode, assetUrl: string) {
+  if (!assetUrl) {
+    return "";
+  }
+
+  if (node.kind === "chart") {
+    return "chart";
+  }
+
+  if (node.kind === "image" || node.kind === "scene") {
+    return "image";
+  }
+
+  if (node.kind === "d3" || node.kind === "three") {
+    return "visual";
+  }
+
+  if (node.kind === "voice") {
+    return "voice";
+  }
+
+  if (node.kind === "caption") {
+    return "caption";
+  }
+
+  return "asset";
+}
+
+function nodeProvider(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  return (
+    stringData(node.data.provider) ??
+    stringData(caption?.provider) ??
+    stringData(node.data.generatedBy) ??
+    ""
+  );
+}
+
+function nodeCueCount(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  const directCueCount = numberData(node.data.cueCount);
+
+  if (directCueCount) {
+    return directCueCount;
+  }
+
+  const directCues = arrayData(node.data.cues);
+  if (directCues) {
+    return directCues.length;
+  }
+
+  const captionCues = arrayData(caption?.cues);
+  return captionCues?.length ?? 0;
+}
+
+function nodeDurationSec(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  return numberData(node.data.durationSec) ?? numberData(caption?.durationSec) ?? 0;
+}
+
+function stringData(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberData(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function arrayData(value: unknown) {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function recordData(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function compactText(value: string, limit: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, limit - 1))}...`;
+}
+
+function roundCanvasNumber(value: number) {
+  return Math.round(value * 100) / 100;
+}

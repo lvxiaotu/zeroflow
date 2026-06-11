@@ -1,0 +1,37 @@
+{
+  "name": "@zeroflow/remotion-video",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "studio": "remotion studio src/remotion-entry.tsx",
+    "still": "tsx scripts/render-sample.ts --still",
+    "render": "tsx scripts/render-sample.ts --video"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.474",
+    "@remotion/cli": "4.0.474",
+    "@remotion/renderer": "4.0.474",
+    "@types/node": "^22.19.20",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@remotion/media": "4.0.474",
+    "@zeroflow/core": "workspace:*",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.474"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@zeroflow/core": ["packages/core/src/index.ts"],
+      "@zeroflow/db": ["packages/db/src/index.ts"],
+      "@zeroflow/providers": ["packages/providers/src/index.ts"],
+      "@zeroflow/renderers": ["packages/renderers/src/index.ts"],
+      "@zeroflow/remotion-video": ["packages/remotion-video/src/index.ts"]
+    }
+  }
+}

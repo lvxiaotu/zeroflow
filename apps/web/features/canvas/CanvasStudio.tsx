@@ -189,16 +189,21 @@ export function CanvasStudio({
   function commitCanvas(updater: (current: CanvasDocument) => CanvasDocument) {
     setCanvasDoc((current) => {
       const next = updater(current);
+      canvasRef.current = next;
       localStorage.setItem(storageKey, JSON.stringify(next));
       setSaveState("unsaved");
       return next;
     });
   }
 
-  async function saveCanvasAsync() {
-    const currentCanvas = canvasRef.current;
+  async function saveCanvasAsync(
+    canvasToSave: CanvasDocument = canvasRef.current,
+    messages: { saving?: string; saved?: string; failed?: string } = {}
+  ) {
+    const currentCanvas = canvasToSave;
+    canvasRef.current = currentCanvas;
     setSaveState("saving");
-    setStatusText("正在保存画布");
+    setStatusText(messages.saving ?? "正在保存画布");
     localStorage.setItem(storageKey, JSON.stringify(currentCanvas));
 
     try {
@@ -220,11 +225,11 @@ export function CanvasStudio({
       canvasRef.current = savedCanvas;
       localStorage.setItem(storageKey, JSON.stringify(savedCanvas));
       setSaveState("saved");
-      setStatusText("画布已保存");
+      setStatusText(messages.saved ?? "画布已保存");
       return savedCanvas;
     } catch {
       setSaveState("error");
-      setStatusText("画布保存失败");
+      setStatusText(messages.failed ?? "画布保存失败");
       return null;
     }
   }
@@ -293,7 +298,7 @@ export function CanvasStudio({
     }));
   }
 
-  function deleteNode(nodeId: string) {
+  async function deleteNode(nodeId: string) {
     const node = canvasRef.current.nodes.find((item) => item.id === nodeId);
 
     if (!node) {
@@ -308,14 +313,23 @@ export function CanvasStudio({
       return;
     }
 
-    commitCanvas((current) => ({
-      ...current,
-      nodes: current.nodes.filter((item) => item.id !== nodeId),
-      edges: current.edges.filter((edge) => edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId)
-    }));
+    const nextCanvas = {
+      ...canvasRef.current,
+      nodes: canvasRef.current.nodes.filter((item) => item.id !== nodeId),
+      edges: canvasRef.current.edges.filter(
+        (edge) => edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId
+      )
+    };
+    setCanvasDoc(nextCanvas);
+    canvasRef.current = nextCanvas;
+    localStorage.setItem(storageKey, JSON.stringify(nextCanvas));
     setSelectedNodeId((current) => (current === nodeId ? undefined : current));
     setExpandedNodeId((current) => (current === nodeId ? undefined : current));
-    setStatusText(`已删除节点：${getNodeTitle(node)}`);
+    await saveCanvasAsync(nextCanvas, {
+      saving: `正在删除并保存：${getNodeTitle(node)}`,
+      saved: `已删除节点：${getNodeTitle(node)}`,
+      failed: `已在本地删除节点，但保存失败：${getNodeTitle(node)}`
+    });
   }
 
   function updateCanvasDuringDrag(updater: (current: CanvasDocument) => CanvasDocument) {

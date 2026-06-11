@@ -25,6 +25,14 @@ pnpm lint
 pnpm build
 ```
 
-## Current Phase
+## Phase Status
 
-The project is starting at `P0`: workspace skeleton, app shell, shared package directories, and baseline tooling.
+`P0` is complete. The repository now has the baseline workspace needed for ongoing feature work:
+
+- pnpm monorepo with `apps/web` and shared `packages/*`
+- Next.js Web Studio app shell
+- TypeScript, lint, format, and workspace package scripts
+- Runtime `data/` folders kept out of git except for `.gitkeep` placeholders
+- Architecture, technical architecture, and phase plan documents
+
+Current active work is beyond P0: canvas-first video generation workflow, provider integration, reusable assets, preview/export, and tldraw-based editing.

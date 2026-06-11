@@ -1828,3 +1828,23 @@ Next:
 - Extend Composition from primaryVisualKind to multi-layer resource slots so split/overlay can show, for example, chart plus sketch together.
 - Consider making Export clip default frameRange derive from the scoped Composition duration.
 ```
+
+## 12.11 P0 Closure
+
+```txt
+Date: 2026-06-11
+Phase: P0 project skeleton and baseline agreements
+Done:
+- README now records P0 as complete instead of saying the project is starting at P0.
+- Confirmed the repository has the expected pnpm monorepo skeleton, Next.js app shell, shared packages, TypeScript, lint, format, git ignore rules, and architecture/phase documents.
+- Runtime data, logs, build outputs, local browser profiles, and CodeGraph indexes are ignored by git; data directories keep only .gitkeep placeholders.
+Validation:
+- pnpm install --frozen-lockfile
+- pnpm typecheck
+- pnpm lint
+- curl -I http://localhost:3000/ returned 200 OK
+Remaining:
+- None for P0.
+Next:
+- Continue feature work in later phases: canvas workflow, tldraw editing, provider integrations, reusable assets, and scoped preview/export.
+```

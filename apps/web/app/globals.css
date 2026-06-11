@@ -298,7 +298,13 @@ a {
   font-size: 18px;
   font-weight: 900;
   letter-spacing: 0;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.edge-link:hover .edge-label {
+  opacity: 1;
 }
 
 .workflow-node {

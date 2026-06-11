@@ -610,7 +610,7 @@ export function CanvasStudio({
                 const label = getEdgeLabelPoint(fromNode, toNode);
 
                 return (
-                  <g key={edge.id}>
+                  <g className="edge-link" key={edge.id}>
                     <path
                       className="edge-path"
                       data-relation={edge.relation}

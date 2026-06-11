@@ -19,15 +19,25 @@ export function createDeepSeekProvider(): LlmProvider {
   const apiKey = readEnv("DEEPSEEK_API_KEY");
   const baseUrl = readEnv("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com";
   const defaultModel = readEnv("DEEPSEEK_MODEL") ?? "deepseek-chat";
+  const yunwuApiKey = readEnv("YUNWU_API_KEY");
+  const yunwuBaseUrl = readEnv("YUNWU_BASE_URL") ?? "https://yunwu.ai/v1";
   const mock = createMockLlmProvider();
 
-  if (!apiKey) {
+  if (!apiKey && !yunwuApiKey) {
     return mock;
   }
 
   return {
     async generateScript(input) {
       const fallback = () => mock.generateScript(input);
+      const backend = resolveChatBackend({
+        deepseekApiKey: apiKey,
+        deepseekBaseUrl: baseUrl,
+        defaultModel,
+        requestedModel: input.model,
+        yunwuApiKey,
+        yunwuBaseUrl
+      });
       const prompt = [
         "请为一个占星教学短视频生成完整教学文案。输出严格 JSON，不要 Markdown。",
         `主题：${input.topic}`,
@@ -43,9 +53,7 @@ export function createDeepSeekProvider(): LlmProvider {
         'JSON 字段：title（视频标题）, hook（开场悬念句50字以内）, scriptText（完整口播文案）, tone（语气风格描述）, targetDurationSec（目标时长秒数）'
       ].join("\n");
       const result = await completeJson<GeneratedScript>({
-        apiKey,
-        baseUrl,
-        model: input.model ?? defaultModel,
+        ...backend,
         messages: [
           {
             role: "system",
@@ -56,10 +64,18 @@ export function createDeepSeekProvider(): LlmProvider {
         fallback
       });
 
-      return { ...result, provider: "deepseek" };
+      return result;
     },
     async generateStoryboard(input) {
       const fallback = () => mock.generateStoryboard(input);
+      const backend = resolveChatBackend({
+        deepseekApiKey: apiKey,
+        deepseekBaseUrl: baseUrl,
+        defaultModel,
+        requestedModel: input.model,
+        yunwuApiKey,
+        yunwuBaseUrl
+      });
       const prompt = [
         "请根据占星教学短视频的文案，生成详细的分镜方案。输出严格 JSON，不要 Markdown。",
         `分镜数量：${input.sceneCount}`,
@@ -74,9 +90,7 @@ export function createDeepSeekProvider(): LlmProvider {
         "JSON 字段：scenes。scenes 每项字段：title（分镜标题）, description（画面描述）, narration（该段口播文案原文）, sceneType（text/astro-chart/sketch）, durationSec（该段时长秒数）, visualPrompt（视觉提示词，英文）, caption（屏幕文字）"
       ].join("\n");
       const result = await completeJson<GeneratedStoryboard>({
-        apiKey,
-        baseUrl,
-        model: input.model ?? defaultModel,
+        ...backend,
         messages: [
           {
             role: "system",
@@ -87,8 +101,43 @@ export function createDeepSeekProvider(): LlmProvider {
         fallback
       });
 
-      return { ...result, provider: "deepseek" };
+      return result;
     }
+  };
+}
+
+function resolveChatBackend({
+  deepseekApiKey,
+  deepseekBaseUrl,
+  defaultModel,
+  requestedModel,
+  yunwuApiKey,
+  yunwuBaseUrl
+}: {
+  deepseekApiKey?: string;
+  deepseekBaseUrl: string;
+  defaultModel: string;
+  requestedModel?: string;
+  yunwuApiKey?: string;
+  yunwuBaseUrl: string;
+}) {
+  const model = requestedModel ?? defaultModel;
+  const useDeepSeek = model.startsWith("deepseek");
+
+  if (useDeepSeek || !yunwuApiKey) {
+    return {
+      apiKey: deepseekApiKey,
+      baseUrl: deepseekBaseUrl,
+      model: useDeepSeek ? model : defaultModel,
+      provider: "deepseek"
+    };
+  }
+
+  return {
+    apiKey: yunwuApiKey,
+    baseUrl: yunwuBaseUrl,
+    model,
+    provider: "yunwu-llm"
   };
 }
 
@@ -96,16 +145,70 @@ async function completeJson<T>({
   apiKey,
   baseUrl,
   model,
+  provider,
   messages,
   fallback
+}: {
+  apiKey?: string;
+  baseUrl: string;
+  model: string;
+  provider: string;
+  messages: ChatMessage[];
+  fallback: () => Promise<ProviderResult<T>>;
+}): Promise<ProviderResult<T>> {
+  if (!apiKey) {
+    return fallback();
+  }
+
+  try {
+    const payload = await requestCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      messages,
+      responseFormat: true
+    });
+    const retryPayload = payload
+      ? null
+      : await requestCompletion({
+          apiKey,
+          baseUrl,
+          model,
+          messages,
+          responseFormat: false
+        });
+    const finalPayload = payload ?? retryPayload;
+    const content = finalPayload?.choices?.[0]?.message?.content;
+    const data = content ? parseJsonContent<T>(content) : null;
+
+    if (!finalPayload || !data) {
+      return fallback();
+    }
+
+    return {
+      provider,
+      usedMock: false,
+      data,
+      raw: finalPayload
+    };
+  } catch {
+    return fallback();
+  }
+}
+
+async function requestCompletion({
+  apiKey,
+  baseUrl,
+  model,
+  messages,
+  responseFormat
 }: {
   apiKey: string;
   baseUrl: string;
   model: string;
   messages: ChatMessage[];
-  fallback: () => Promise<ProviderResult<T>>;
-}): Promise<ProviderResult<T>> {
-  try {
+  responseFormat: boolean;
+}) {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: {
@@ -116,35 +219,28 @@ async function completeJson<T>({
         model,
         messages,
         temperature: 0.7,
-        response_format: { type: "json_object" }
+        ...(responseFormat ? { response_format: { type: "json_object" } } : {})
       })
     });
 
     if (!response.ok) {
-      return fallback();
+      return null;
     }
 
-    const payload = (await response.json()) as DeepSeekResponse;
-    const content = payload.choices?.[0]?.message?.content;
-    if (!content) {
-      return fallback();
-    }
-
-    return {
-      provider: "deepseek",
-      usedMock: false,
-      data: JSON.parse(stripJsonFence(content)) as T,
-      raw: payload
-    };
-  } catch {
-    return fallback();
-  }
+    return (await response.json()) as DeepSeekResponse;
 }
 
-function stripJsonFence(value: string) {
-  return value
+function parseJsonContent<T>(value: string) {
+  const stripped = value
     .trim()
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "");
+
+  try {
+    return JSON.parse(stripped) as T;
+  } catch {
+    const jsonObject = stripped.match(/\{[\s\S]*\}/)?.[0];
+    return jsonObject ? (JSON.parse(jsonObject) as T) : null;
+  }
 }

@@ -9,8 +9,8 @@ export type AiModelTarget = "llm" | "image";
 
 export const llmModelOptions: AiModelOption[] = [
   { value: "deepseek-chat", label: "DeepSeek Chat" },
-  { value: "gpt-5.5", label: "GPT-5.5" },
-  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" }
+  { value: "gpt-5.5", label: "云雾 / GPT-5.5" },
+  { value: "gemini-2.5-pro", label: "云雾 / Gemini 2.5 Pro" }
 ];
 
 export const imageModelOptions: AiModelOption[] = [

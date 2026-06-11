@@ -4,7 +4,7 @@ export function createMockLlmProvider(): LlmProvider {
   return {
     async generateScript(input) {
       const targetDurationSec = input.targetDurationSec ?? 45;
-      const topic = input.topic || "占星基础知识";
+      const topic = normalizeScriptTopic(input.topic || "占星基础知识");
       const mockScripts: Record<string, { hook: string; scriptText: string }> = {
         "上升星座": {
           hook: "为什么你觉得自己有时候像两个人？其实答案藏在你出生时东方地平线上升起的那颗星座里。",
@@ -96,6 +96,29 @@ export function createMockLlmProvider(): LlmProvider {
       };
     }
   };
+}
+
+function normalizeScriptTopic(value: string) {
+  const trimmed = value.trim();
+  const cutPhrases = [
+    "我要制作",
+    "我想制作",
+    "请你",
+    "帮我",
+    "要求",
+    "，要求",
+    "。要求",
+    "\n"
+  ];
+  const cutIndex = cutPhrases
+    .map((phrase) => trimmed.indexOf(phrase))
+    .filter((index) => index > 0)
+    .sort((left, right) => left - right)[0];
+  const topic = (cutIndex ? trimmed.slice(0, cutIndex) : trimmed)
+    .replace(/[，。,.：:；;、\s]+$/g, "")
+    .trim();
+
+  return topic || trimmed.slice(0, 40) || "占星基础知识";
 }
 
 export function createMockImageProvider(): ImageProvider {

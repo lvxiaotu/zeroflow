@@ -17,7 +17,6 @@ import {
 } from "@zeroflow/db";
 import { getProviders } from "@zeroflow/providers";
 import type { BirthChartInput } from "@zeroflow/providers";
-import { getUnconfirmedLiveProviderRisk } from "./providerGuard";
 
 export async function runJob(jobId: string) {
   const job = getJob(jobId);
@@ -31,19 +30,6 @@ export async function runJob(jobId: string) {
 
   if (job.status === "failed" && job.attempts >= job.maxAttempts) {
     return job;
-  }
-
-  const liveProviderRisk = getUnconfirmedLiveProviderRisk(job);
-  if (liveProviderRisk) {
-    return updateJob(job.id, {
-      status: "failed",
-      error: {
-        type: "user-fixable",
-        message: `${liveProviderRisk.providerLabel} requires explicit confirmation before running ${job.type}.`,
-        details: liveProviderRisk,
-        retryable: false
-      }
-    });
   }
 
   updateJob(job.id, { status: "running", incrementAttempts: true });

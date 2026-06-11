@@ -103,23 +103,6 @@ export function ProviderSettingsDashboard() {
   }, []);
 
   async function verifyProviders(mode: VerifyResult["mode"]) {
-    if (mode === "live") {
-      const shouldRun = window.confirm(
-        [
-          "Run live provider checks?",
-          "DeepSeek, Yunwu, or RunningHub may consume external API quota when configured.",
-          ttsDryRun
-            ? "IndexTTS stays in dry-run mode."
-            : "IndexTTS dry-run is off and may request real audio generation."
-        ].join("\n")
-      );
-
-      if (!shouldRun) {
-        setStatusText("Live check cancelled");
-        return;
-      }
-    }
-
     setRunningMode(mode);
     setStatusText(mode === "live" ? "Running live checks" : "Running local checks");
     const response = await fetch("/api/providers/verify", {

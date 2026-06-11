@@ -1,7 +1,6 @@
 import { jobTypeSchema } from "@zeroflow/core";
 import { createJob, listJobs } from "@zeroflow/db";
 import { NextResponse, type NextRequest } from "next/server";
-import { jobNeedsLiveProviderConfirmation } from "@/server/jobs/providerGuard";
 
 export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("projectId") ?? undefined;
@@ -23,18 +22,6 @@ export async function POST(request: NextRequest) {
 
   const input =
     body.input && typeof body.input === "object" && !Array.isArray(body.input) ? body.input : {};
-  const liveProviderRisk = jobNeedsLiveProviderConfirmation(parsedType.data, input);
-
-  if (liveProviderRisk) {
-    return NextResponse.json(
-      {
-        error: "live provider confirmation required",
-        confirmationRequired: true,
-        providerRisk: liveProviderRisk
-      },
-      { status: 409 }
-    );
-  }
 
   const job = createJob({
     projectId: String(body.projectId),

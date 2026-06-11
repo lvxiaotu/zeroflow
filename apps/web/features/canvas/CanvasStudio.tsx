@@ -15,13 +15,6 @@ import { AstroVideoComposition, getCompositionSize } from "@zeroflow/remotion-vi
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import {
-  fetchProviderHealth,
-  getLiveProviderRunGuard,
-  liveProviderConfirmationMessage,
-  markLiveProviderConfirmed,
-  type ClientProviderHealth
-} from "../jobs/providerGuard";
-import {
   defaultPreviewFrame,
   getExportFrameRange,
   getExportScope,
@@ -112,7 +105,6 @@ export function CanvasStudio({
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [statusText, setStatusText] = useState("画布已就绪");
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
-  const [providerHealth, setProviderHealth] = useState<ClientProviderHealth[]>([]);
   const canvasRef = useRef<CanvasDocument>(defaultCanvasDocument);
   const dragStateRef = useRef<CanvasDragState | null>(null);
   canvasRef.current = canvasDoc;
@@ -162,23 +154,6 @@ export function CanvasStudio({
       cancelled = true;
     };
   }, [initialNodeId, projectId, storageKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadProviders() {
-      const health = await fetchProviderHealth();
-
-      if (!cancelled) {
-        setProviderHealth(health);
-      }
-    }
-
-    void loadProviders();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const selectedNode = useMemo(
     () => canvasDoc.nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -349,17 +324,6 @@ export function CanvasStudio({
       return;
     }
 
-    const liveProviderGuard = getLiveProviderRunGuard(
-      draftJobRequest.type,
-      providerHealth,
-      draftJobRequest.input
-    );
-
-    if (liveProviderGuard && !window.confirm(liveProviderConfirmationMessage(liveProviderGuard))) {
-      setStatusText(`${liveProviderGuard.providerLabel} 运行已取消`);
-      return;
-    }
-
     const savedCanvas = await saveCanvasAsync();
     const currentCanvas = savedCanvas ?? canvasRef.current;
     const node = currentCanvas.nodes.find((item) => item.id === nodeId);
@@ -374,11 +338,6 @@ export function CanvasStudio({
     setStatusText(`正在运行：${getJobTypeLabel(draftJobRequest.type)}`);
 
     try {
-      const jobInput = markLiveProviderConfirmed(
-        draftJobRequest.type,
-        draftJobRequest.input,
-        providerHealth
-      );
       const created = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -386,19 +345,12 @@ export function CanvasStudio({
           projectId,
           type: draftJobRequest.type,
           canvasNodeId: node.id,
-          input: jobInput
+          input: draftJobRequest.input
         })
       });
 
       if (!created.ok) {
-        const payload = (await created.json().catch(() => ({}))) as {
-          providerRisk?: { providerLabel?: string };
-        };
-        throw new Error(
-          payload.providerRisk?.providerLabel
-            ? `${payload.providerRisk.providerLabel} 需要确认`
-            : "任务创建失败"
-        );
+        throw new Error("任务创建失败");
       }
 
       const createdPayload = (await created.json()) as { job: { id: string } };
@@ -725,7 +677,6 @@ export function CanvasStudio({
                     <InspectorPanel
                       node={node}
                       previewSpec={previewSpec}
-                      providerHealth={providerHealth}
                       running={runningNodeId === node.id}
                       statusText={statusText}
                       variant="inline"
@@ -759,7 +710,6 @@ export function CanvasStudio({
       <InspectorPanel
         node={selectedNode}
         previewSpec={previewSpec}
-        providerHealth={providerHealth}
         running={runningNodeId === selectedNode?.id}
         statusText={statusText}
         onNodeChange={(key, value) => {
@@ -791,7 +741,6 @@ export function CanvasStudio({
 function InspectorPanel({
   node,
   previewSpec,
-  providerHealth,
   running,
   statusText,
   onNodeChange,
@@ -804,7 +753,6 @@ function InspectorPanel({
 }: {
   node: CanvasNode | null;
   previewSpec: AstroVideoSpec;
-  providerHealth: ClientProviderHealth[];
   running: boolean;
   statusText: string;
   variant?: "side" | "inline";
@@ -839,9 +787,6 @@ function InspectorPanel({
   }
 
   const nodeJobRequest = getNodeJobRequest(node);
-  const liveProviderGuard = nodeJobRequest
-    ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
-    : null;
   const assetUrl = getNodeAssetUrl(node);
   const aiModelTarget = getAiModelTarget(node.kind);
   const aiPromptDataKey = getAiPromptDataKey(node.kind);
@@ -862,7 +807,7 @@ function InspectorPanel({
       {nodeJobRequest ? (
         <section className="job-actions">
           <button
-            data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
+            data-risk="local-or-mock"
             disabled={running}
             type="button"
             onClick={() => onRunNode(node.id)}
@@ -871,11 +816,9 @@ function InspectorPanel({
           </button>
           <div
             className="job-provider-notice"
-            data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
+            data-risk="local-or-mock"
           >
-            {liveProviderGuard
-              ? `${liveProviderGuard.providerLabel} 运行前需要确认。`
-              : statusText}
+            {statusText}
           </div>
         </section>
       ) : null}

@@ -21,9 +21,6 @@ import {
 } from "../captions/CaptionCueTimeline";
 import {
   fetchProviderHealth,
-  getLiveProviderRunGuard,
-  liveProviderConfirmationMessage,
-  markLiveProviderConfirmed,
   summarizeProviderHealth,
   type ClientProviderHealth
 } from "../jobs/providerGuard";
@@ -309,20 +306,6 @@ export function TldrawCanvasClient({
         return;
       }
 
-      const liveProviderGuard = getLiveProviderRunGuard(
-        draftJobRequest.type,
-        providerHealth,
-        draftJobRequest.input
-      );
-
-      if (
-        liveProviderGuard &&
-        !window.confirm(liveProviderConfirmationMessage(liveProviderGuard))
-      ) {
-        setStatusText(`${liveProviderGuard.providerLabel} run cancelled`);
-        return;
-      }
-
       const savedCanvas = await saveTldrawCanvas();
       const currentCanvas = savedCanvas ?? canvasRef.current;
       const node = currentCanvas?.nodes.find((item) => item.id === nodeId);
@@ -337,11 +320,6 @@ export function TldrawCanvasClient({
       setStatusText(`Running ${draftJobRequest.type}`);
 
       try {
-        const jobInput = markLiveProviderConfirmed(
-          draftJobRequest.type,
-          draftJobRequest.input,
-          providerHealth
-        );
         const created = await fetch("/api/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -349,19 +327,12 @@ export function TldrawCanvasClient({
             projectId,
             type: draftJobRequest.type,
             canvasNodeId: node.id,
-            input: jobInput
+            input: draftJobRequest.input
           })
         });
 
         if (!created.ok) {
-          const payload = (await created.json().catch(() => ({}))) as {
-            providerRisk?: { providerLabel?: string };
-          };
-          throw new Error(
-            payload.providerRisk?.providerLabel
-              ? `${payload.providerRisk.providerLabel} confirmation required`
-              : "job creation failed"
-          );
+          throw new Error("job creation failed");
         }
 
         const createdPayload = (await created.json()) as { job: { id: string } };
@@ -401,7 +372,7 @@ export function TldrawCanvasClient({
         setRunningNodeId(null);
       }
     },
-    [loadProjectCanvas, projectId, providerHealth, saveTldrawCanvas]
+    [loadProjectCanvas, projectId, saveTldrawCanvas]
   );
 
   const runNodeAction = useCallback(
@@ -709,7 +680,6 @@ export function TldrawCanvasClient({
           <span>{summarizeProviderHealth(providerHealth)}</span>
           <TldrawNodeInspector
             node={selectedNode}
-            providerHealth={providerHealth}
             running={runningNodeId === selectedNode?.id}
             selectedCount={selectedNodeIds.length}
             onDataChange={updateNodeData}
@@ -740,7 +710,6 @@ export function TldrawCanvasClient({
 
 function TldrawNodeInspector({
   node,
-  providerHealth,
   running,
   selectedCount,
   onDataChange,
@@ -753,7 +722,6 @@ function TldrawNodeInspector({
   onSizeChange
 }: {
   node: CanvasNode | null;
-  providerHealth: ClientProviderHealth[];
   running: boolean;
   selectedCount: number;
   onDataChange: (nodeId: string, key: string, value: string | number | boolean) => boolean;
@@ -786,9 +754,6 @@ function TldrawNodeInspector({
   const visualRenderMode = getString(node.data.renderMode, assetUrl ? "asset" : "contract");
   const nodeJobRequest = getNodeJobRequest(node);
   const runnable = nodeJobRequest !== null;
-  const liveProviderGuard = nodeJobRequest
-    ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
-    : null;
   const aiModelTarget = getAiModelTarget(node.kind);
   const aiPromptDataKey = getAiPromptDataKey(node.kind);
   const d3Diagram = getString(node.data.diagram, "timeline");
@@ -815,7 +780,7 @@ function TldrawNodeInspector({
         <>
           <button
             className="tldraw-inspector-run"
-            data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
+            data-risk="local-or-mock"
             disabled={running}
             type="button"
             onClick={() => void onRunNode(node.id)}
@@ -824,14 +789,10 @@ function TldrawNodeInspector({
           </button>
           <section
             className="tldraw-provider-guard"
-            data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
+            data-risk="local-or-mock"
           >
-            <strong>{liveProviderGuard ? "Live provider" : "Local or mock"}</strong>
-            <span>
-              {liveProviderGuard
-                ? `${liveProviderGuard.providerLabel} requires confirmation before this job runs.`
-                : "This job does not need live provider confirmation."}
-            </span>
+            <strong>Ready to run</strong>
+            <span>Jobs run immediately with the configured provider.</span>
           </section>
         </>
       ) : null}
@@ -842,16 +803,11 @@ function TldrawNodeInspector({
           <div className="tldraw-resource-grid">
             {sceneResourceJobIds.map((resourceId) => {
               const request = getSceneResourceJobRequest(node, resourceId);
-              const liveProviderGuard = getLiveProviderRunGuard(
-                request.type,
-                providerHealth,
-                request.input
-              );
 
               return (
                 <button
                   className="tldraw-inspector-run"
-                  data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
+                  data-risk="local-or-mock"
                   disabled={running}
                   key={resourceId}
                   type="button"

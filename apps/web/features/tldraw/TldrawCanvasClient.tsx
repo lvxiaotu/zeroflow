@@ -53,6 +53,13 @@ import {
   type SceneResourceJobId
 } from "../canvas/sceneResourceJobs";
 import {
+  getAiModelOptionsForKind,
+  getAiModelTarget,
+  getNodeAiModel,
+  getSceneImageModel,
+  imageModelOptions
+} from "../canvas/aiModels";
+import {
   getCreateExportJobRequest,
   getCreatePreviewJobRequest
 } from "../canvas/productionFlowJobs";
@@ -777,6 +784,7 @@ function TldrawNodeInspector({
   const liveProviderGuard = nodeJobRequest
     ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
     : null;
+  const aiModelTarget = getAiModelTarget(node.kind);
   const d3Diagram = getString(node.data.diagram, "timeline");
   const d3Preset = getD3VisualPreset(getString(node.data.visualPreset, d3Diagram));
   const d3JsonStatus = d3DataJsonStatus(d3Diagram, getString(node.data.dataJson, ""));
@@ -885,6 +893,23 @@ function TldrawNodeInspector({
         />
       </label>
 
+      {aiModelTarget ? (
+        <label>
+          AI 模型
+          <select
+            name="aiModel"
+            value={getNodeAiModel(node)}
+            onChange={(event) => onDataChange(node.id, "aiModel", event.currentTarget.value)}
+          >
+            {getAiModelOptionsForKind(node.kind).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
       {node.kind === "script" ? (
         <label>
           Script text
@@ -945,6 +970,20 @@ function TldrawNodeInspector({
               value={getString(node.data.visualPrompt, "")}
               onChange={(event) => onDataChange(node.id, "visualPrompt", event.currentTarget.value)}
             />
+          </label>
+          <label>
+            插画模型
+            <select
+              name="imageModel"
+              value={getSceneImageModel(node)}
+              onChange={(event) => onDataChange(node.id, "imageModel", event.currentTarget.value)}
+            >
+              {imageModelOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
         </>
       ) : null}
@@ -1556,7 +1595,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-script",
       input: {
-        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short"))
+        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short")),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1566,7 +1606,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       type: "generate-storyboard",
       input: {
         scriptText: getString(node.data.scriptText, ""),
-        sceneCount: getNumber(node.data.sceneCount, 5)
+        sceneCount: getNumber(node.data.sceneCount, 5),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1578,7 +1619,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
         prompt: getString(
           node.data.prompt,
           getString(node.data.description, "simple educational astrology line drawing")
-        )
+        ),
+        model: getNodeAiModel(node)
       }
     };
   }

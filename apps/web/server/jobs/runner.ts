@@ -128,8 +128,14 @@ async function generateScript(job: Job) {
     stringData(sourceNode, "topic") ??
     stringData(topicNode, "topic") ??
     project.topic;
+  const model =
+    stringInput(job.input.model) ??
+    stringData(sourceNode, "aiModel") ??
+    stringData(topicNode, "aiModel") ??
+    stringData(scriptNode, "aiModel");
   const result = await getProviders().llm.generateScript({
     topic,
+    model,
     targetDurationSec:
       numberInput(job.input.targetDurationSec) ??
       numberData(sourceNode, "targetDurationSec") ??
@@ -148,6 +154,7 @@ async function generateScript(job: Job) {
     tone: result.data.tone,
     targetDurationSec: result.data.targetDurationSec,
     sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
+    aiModel: model,
     provider: result.provider,
     usedMock: result.usedMock
   });
@@ -183,12 +190,20 @@ async function generateStoryboard(job: Job) {
     numberData(sourceNode, "sceneCount") ??
     numberData(storyboardNode, "sceneCount") ??
     5;
+  const model =
+    stringInput(job.input.model) ??
+    stringData(sourceNode, "aiModel") ??
+    stringData(scriptNode, "aiModel") ??
+    stringData(storyboardNode, "aiModel");
   const result = await getProviders().llm.generateStoryboard({
     scriptText,
     sceneCount,
+    model,
     targetDurationSec: numberInput(job.input.targetDurationSec) ?? 45
   });
-  const canvas = applyStoryboard(project.canvas, sourceNode ?? scriptNode ?? storyboardNode, result.data.scenes);
+  const canvas = applyStoryboard(project.canvas, sourceNode ?? scriptNode ?? storyboardNode, result.data.scenes, {
+    aiModel: model
+  });
 
   updateVideoProject(project.id, { canvas });
 
@@ -225,6 +240,10 @@ async function generateImage(job: Job) {
   const sceneNode = sourceNode?.kind === "scene" ? sourceNode : undefined;
   let workingCanvas = project.canvas;
   let imageNode = sourceNode?.kind === "image" ? sourceNode : undefined;
+  const inputModel =
+    stringInput(job.input.model) ??
+    stringData(sourceNode, "imageModel") ??
+    stringData(sourceNode, "aiModel");
 
   if (!imageNode && sceneNode) {
     const upserted = upsertSceneResourceNode(workingCanvas, sceneNode, "image", {
@@ -236,7 +255,8 @@ async function generateImage(job: Job) {
         stringInput(job.input.prompt) ??
         stringData(sceneNode, "visualPrompt") ??
         stringData(sceneNode, "description") ??
-        "simple educational astrology line drawing"
+        "simple educational astrology line drawing",
+      aiModel: inputModel
     });
     workingCanvas = upserted.canvas;
     imageNode = upserted.node;
@@ -248,9 +268,11 @@ async function generateImage(job: Job) {
     stringData(imageNode, "prompt") ??
     stringData(sceneNode, "visualPrompt") ??
     "simple educational astrology line drawing";
+  const model = inputModel ?? stringData(imageNode, "aiModel");
   const outputPath = path.join(getProjectAssetDir(project.id), `${job.id}.png`);
   const result = await getProviders().image.generateImage({
     prompt,
+    model,
     outputPath,
     size: "1024x1536"
   });
@@ -269,6 +291,7 @@ async function generateImage(job: Job) {
     path: assetPath,
     metadata: {
       prompt,
+      model,
       provider: result.provider,
       usedMock: result.usedMock,
       url: result.data.url
@@ -292,7 +315,8 @@ async function generateImage(job: Job) {
         assetUrl,
         provider: result.provider,
         usedMock: result.usedMock,
-        prompt
+        prompt,
+        aiModel: model
       })
     });
   }
@@ -304,6 +328,7 @@ async function generateImage(job: Job) {
     assetPath,
     assetUrl,
     imageNodeId: imageNode?.id,
+    model,
     asset
   };
 }
@@ -1987,7 +2012,8 @@ function applyStoryboard(
     durationSec: number;
     visualPrompt?: string;
     caption?: string;
-  }>
+  }>,
+  options: { aiModel?: string } = {}
 ): CanvasDocument {
   const baseX = sourceNode ? sourceNode.position.x + 360 : 700;
   const baseY = sourceNode ? sourceNode.position.y + 230 : 260;
@@ -2039,7 +2065,8 @@ function applyStoryboard(
               status: "ready" as const,
               data: {
                 ...node.data,
-                generatedSceneCount: scenes.length
+                generatedSceneCount: scenes.length,
+                aiModel: options.aiModel
               }
             }
           : node

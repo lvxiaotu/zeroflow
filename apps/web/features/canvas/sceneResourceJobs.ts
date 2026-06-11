@@ -1,4 +1,5 @@
 import type { CanvasNode, JobType } from "@zeroflow/core";
+import { getSceneImageModel } from "./aiModels";
 
 export type NodeJobRequest = {
   type: JobType;
@@ -80,6 +81,7 @@ export function getSceneResourceJobRequest(
         type: "generate-image",
         input: {
           prompt: visualPrompt,
+          model: getSceneImageModel(node),
           durationSec
         }
       };

@@ -35,6 +35,13 @@ import {
   type SceneResourceJobId
 } from "./sceneResourceJobs";
 import { defaultCanvasDocument, defaultProjectId, nodeKindDescriptions, nodeKindLabels } from "./seed";
+import {
+  getAiModelOptionsForKind,
+  getAiModelTarget,
+  getNodeAiModel,
+  getSceneImageModel,
+  imageModelOptions
+} from "./aiModels";
 
 type SaveState = "saved" | "saving" | "unsaved" | "restored" | "error";
 type CanvasDragState =
@@ -817,6 +824,7 @@ function InspectorPanel({
     ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
     : null;
   const assetUrl = getNodeAssetUrl(node);
+  const aiModelTarget = getAiModelTarget(node.kind);
   const content = (
     <>
       <header>
@@ -904,6 +912,22 @@ function InspectorPanel({
         />
       </label>
 
+      {aiModelTarget ? (
+        <label>
+          AI 模型
+          <select
+            value={getNodeAiModel(node)}
+            onChange={(event) => onDataChange("aiModel", event.currentTarget.value)}
+          >
+            {getAiModelOptionsForKind(node.kind).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
       {node.kind === "topic" ? (
         <label>
           主题
@@ -970,6 +994,19 @@ function InspectorPanel({
               value={getString(node.data.visualPrompt, "")}
               onChange={(event) => onDataChange("visualPrompt", event.currentTarget.value)}
             />
+          </label>
+          <label>
+            插画模型
+            <select
+              value={getSceneImageModel(node)}
+              onChange={(event) => onDataChange("imageModel", event.currentTarget.value)}
+            >
+              {imageModelOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
         </>
       ) : null}
@@ -1420,7 +1457,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-script",
       input: {
-        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short"))
+        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short")),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1430,7 +1468,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       type: "generate-storyboard",
       input: {
         scriptText: getString(node.data.scriptText, ""),
-        sceneCount: getNumber(node.data.sceneCount, 5)
+        sceneCount: getNumber(node.data.sceneCount, 5),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1442,7 +1481,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
         prompt: getString(
           node.data.prompt,
           getString(node.data.description, "simple educational astrology line drawing")
-        )
+        ),
+        model: getNodeAiModel(node)
       }
     };
   }

@@ -39,6 +39,7 @@ export type GeneratedStoryboard = {
 export type LlmProvider = {
   generateScript(input: {
     topic: string;
+    model?: string;
     targetDurationSec?: number;
     tone?: string;
     audience?: string;
@@ -46,6 +47,7 @@ export type LlmProvider = {
   generateStoryboard(input: {
     scriptText: string;
     sceneCount: number;
+    model?: string;
     targetDurationSec?: number;
   }): Promise<ProviderResult<GeneratedStoryboard>>;
 };
@@ -53,6 +55,7 @@ export type LlmProvider = {
 export type ImageProvider = {
   generateImage(input: {
     prompt: string;
+    model?: string;
     size?: "1024x1024" | "1024x1536" | "1536x1024";
     outputPath?: string;
   }): Promise<

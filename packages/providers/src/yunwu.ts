@@ -14,7 +14,7 @@ type ImageResponse = {
 export function createYunwuImageProvider(): ImageProvider {
   const apiKey = readEnv("YUNWU_API_KEY");
   const baseUrl = readEnv("YUNWU_BASE_URL") ?? "https://yunwu.ai/v1";
-  const model = readEnv("YUNWU_IMAGE_MODEL") ?? "gpt-image-2";
+  const defaultModel = readEnv("YUNWU_IMAGE_MODEL") ?? "gpt-image-2";
   const mock = createMockImageProvider();
 
   if (!apiKey) {
@@ -31,7 +31,7 @@ export function createYunwuImageProvider(): ImageProvider {
             Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({
-            model,
+            model: input.model ?? defaultModel,
             prompt: input.prompt,
             size: input.size ?? "1024x1536"
           })

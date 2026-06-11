@@ -18,7 +18,7 @@ type DeepSeekResponse = {
 export function createDeepSeekProvider(): LlmProvider {
   const apiKey = readEnv("DEEPSEEK_API_KEY");
   const baseUrl = readEnv("DEEPSEEK_BASE_URL") ?? "https://api.deepseek.com";
-  const model = readEnv("DEEPSEEK_MODEL") ?? "deepseek-chat";
+  const defaultModel = readEnv("DEEPSEEK_MODEL") ?? "deepseek-chat";
   const mock = createMockLlmProvider();
 
   if (!apiKey) {
@@ -45,7 +45,7 @@ export function createDeepSeekProvider(): LlmProvider {
       const result = await completeJson<GeneratedScript>({
         apiKey,
         baseUrl,
-        model,
+        model: input.model ?? defaultModel,
         messages: [
           {
             role: "system",
@@ -76,7 +76,7 @@ export function createDeepSeekProvider(): LlmProvider {
       const result = await completeJson<GeneratedStoryboard>({
         apiKey,
         baseUrl,
-        model,
+        model: input.model ?? defaultModel,
         messages: [
           {
             role: "system",

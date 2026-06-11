@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Img, cancelRender, continueRender, delayRender } from "remotion";
 
 type LoadedVisualAsset =
@@ -22,12 +22,19 @@ export function RemoteVisualAsset({
 }) {
   const [asset, setAsset] = useState<LoadedVisualAsset | null>(null);
   const [renderHandle] = useState(() => delayRender(`Loading visual asset: ${src}`));
+  const renderReleasedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
     let completed = false;
     let objectUrl: string | null = null;
     const controller = new AbortController();
+    const releaseRenderHandle = () => {
+      if (!renderReleasedRef.current) {
+        renderReleasedRef.current = true;
+        continueRender(renderHandle);
+      }
+    };
 
     fetch(src, { signal: controller.signal })
       .then(async (response) => {
@@ -47,7 +54,7 @@ export function RemoteVisualAsset({
           if (active) {
             setAsset({ kind: "svg", svg });
             completed = true;
-            continueRender(renderHandle);
+            releaseRenderHandle();
           }
           return;
         }
@@ -58,24 +65,26 @@ export function RemoteVisualAsset({
         if (active) {
           setAsset({ kind: "image", objectUrl });
           completed = true;
-          continueRender(renderHandle);
+          releaseRenderHandle();
         }
       })
       .catch((error: unknown) => {
-        if (!active) {
+        if (!active || isExpectedAbort(error, controller.signal)) {
           return;
         }
 
         completed = true;
+        renderReleasedRef.current = true;
         cancelRender(error instanceof Error ? error : new Error("Visual asset request failed"));
       });
 
     return () => {
       active = false;
-      controller.abort();
 
       if (!completed) {
-        continueRender(renderHandle);
+        completed = true;
+        controller.abort(createExpectedAbortReason());
+        releaseRenderHandle();
       }
 
       if (objectUrl) {
@@ -114,4 +123,24 @@ export function RemoteVisualAsset({
       }}
     />
   );
+}
+
+function createExpectedAbortReason() {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("Remote visual asset request was disposed", "AbortError");
+  }
+
+  return new Error("Remote visual asset request was disposed");
+}
+
+function isExpectedAbort(error: unknown, signal: AbortSignal) {
+  if (!signal.aborted) {
+    return false;
+  }
+
+  if (error === signal.reason) {
+    return true;
+  }
+
+  return typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError";
 }

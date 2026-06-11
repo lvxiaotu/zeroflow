@@ -1848,3 +1848,34 @@ Remaining:
 Next:
 - Continue feature work in later phases: canvas workflow, tldraw editing, provider integrations, reusable assets, and scoped preview/export.
 ```
+
+## 12.12 P0 Ordinary Studio Workflow Closure
+
+```txt
+Date: 2026-06-11
+Phase: P0 ordinary homepage Studio acceptance gap
+Done:
+- Ordinary / Studio Inspector now exposes runnable flow buttons instead of raw-data-only editing.
+- Topic nodes can run Generate script.
+- Script and Storyboard nodes can run Generate storyboard and edit Scene count.
+- Scene nodes expose resource generation buttons for Caption, Voice, Chart, Image, D3, Three, and Composition.
+- Composition nodes expose Primary visual, Layout, Transition, Duration, Caption, and Voice controls.
+- Preview nodes expose Still frame and render still.
+- Export nodes expose Export scope, Frame range, and render video/clip.
+- Ordinary Studio preview panel now mounts the Remotion Player with AstroVideoComposition instead of showing a text placeholder.
+- Raw data Apply JSON now replaces node data instead of nesting parsed JSON under data.data.
+Validation:
+- pnpm --filter @zeroflow/web typecheck
+- pnpm --filter @zeroflow/web lint
+- pnpm typecheck
+- pnpm lint
+- curl -I http://localhost:3000/ returned 200 OK
+- Browser check: / shows Generate script, Raw data, and Remotion timecode in the Preview panel.
+- Browser check: selecting Script shows Generate storyboard, Script text, and Scene count.
+- Browser check: adding/selecting a temporary Composition node shows Create preview, Primary visual, Layout, Caption, and Voice controls.
+- Browser interaction check: Generate script ran successfully against node-topic and updated existing node-script, without creating duplicate script nodes.
+Remaining:
+- Ordinary Studio still keeps the advanced caption timeline, D3/Three preset editors, and richer visual inspectors primarily on the tldraw page.
+Next:
+- Decide whether ordinary Studio should become a full parity editor or remain the simpler operational view while tldraw is the advanced canvas.
+```

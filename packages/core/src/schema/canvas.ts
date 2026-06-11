@@ -4,7 +4,9 @@ import { idSchema, metadataSchema, positionSchema, sizeSchema } from "./primitiv
 export const canvasNodeKindSchema = z.enum([
   "topic",
   "script",
+  "structure",
   "storyboard",
+  "chapter",
   "scene",
   "caption",
   "voice",

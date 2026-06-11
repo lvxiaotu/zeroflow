@@ -81,6 +81,12 @@ async function runJobByType(job: Job): Promise<Record<string, unknown>> {
       return generateScript(job);
     case "create-manual-script":
       return createManualScript(job);
+    case "create-structure-node":
+      return createStructureNode(job);
+    case "generate-chapters":
+      return generateChapters(job);
+    case "expand-chapter-scenes":
+      return expandChapterScenes(job);
     case "generate-storyboard":
       return generateStoryboard(job);
     case "resolve-assets":
@@ -281,6 +287,140 @@ async function generateStoryboard(job: Job) {
     usedMock: result.usedMock,
     sceneCount: result.data.scenes.length,
     sceneNodeIds: result.data.scenes.map((_, index) => `node-scene-generated-${index + 1}`),
+    scenes: result.data.scenes
+  };
+}
+
+async function createStructureNode(job: Job) {
+  const project = requireProject(job.projectId);
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+  const scriptNode = sourceNode?.kind === "script" ? sourceNode : findNode(project.canvas, "script");
+  const structureNode = findNode(project.canvas, "structure");
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "targetDurationSec") ??
+    numberData(scriptNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
+  const chapterCount =
+    numberInput(job.input.chapterCount) ??
+    numberData(structureNode, "chapterCount") ??
+    getDefaultChapterCount(targetDurationSec);
+  const scriptText =
+    stringInput(job.input.scriptText) ??
+    stringData(scriptNode, "scriptText") ??
+    project.spec.scenes.map((scene) => scene.narration).join("\n");
+  const canvas = upsertStructureNode(project.canvas, scriptNode ?? sourceNode, structureNode, {
+    title: "结构",
+    description:
+      targetDurationSec <= 60
+        ? "短视频可以直接生成分镜"
+        : `长视频先拆成 ${chapterCount} 个章节，再逐章展开分镜`,
+    scriptText,
+    targetDurationSec,
+    chapterCount,
+    sceneCount: numberData(structureNode, "sceneCount") ?? getDefaultSceneCount(targetDurationSec),
+    sourceScriptNodeId: scriptNode?.id,
+    aiModel: stringData(sourceNode, "aiModel") ?? stringData(scriptNode, "aiModel")
+  });
+
+  updateVideoProject(project.id, { canvas });
+
+  return {
+    structureNodeId: structureNode?.id ?? "node-structure",
+    chapterCount,
+    targetDurationSec
+  };
+}
+
+async function generateChapters(job: Job) {
+  const project = requireProject(job.projectId);
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+  const structureNode = sourceNode?.kind === "structure" ? sourceNode : findNode(project.canvas, "structure");
+  const scriptNode = findNode(project.canvas, "script");
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "targetDurationSec") ??
+    numberData(structureNode, "targetDurationSec") ??
+    numberData(scriptNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
+  const chapterCount =
+    numberInput(job.input.chapterCount) ??
+    numberData(sourceNode, "chapterCount") ??
+    numberData(structureNode, "chapterCount") ??
+    getDefaultChapterCount(targetDurationSec);
+  const scriptText =
+    stringInput(job.input.scriptText) ??
+    stringData(structureNode, "scriptText") ??
+    stringData(scriptNode, "scriptText") ??
+    project.spec.scenes.map((scene) => scene.narration).join("\n");
+  const chapters = createChapterPlan(scriptText, chapterCount, targetDurationSec);
+  const canvas = applyChapters(project.canvas, structureNode ?? scriptNode, chapters, {
+    targetDurationSec,
+    aiModel: stringData(sourceNode, "aiModel") ?? stringData(scriptNode, "aiModel")
+  });
+
+  updateVideoProject(project.id, { canvas });
+
+  return {
+    chapterCount: chapters.length,
+    chapterNodeIds: chapters.map((_, index) => `node-chapter-${index + 1}`),
+    chapters
+  };
+}
+
+async function expandChapterScenes(job: Job) {
+  const project = requireProject(job.projectId);
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+
+  if (!sourceNode || sourceNode.kind !== "chapter") {
+    throw new Error("Chapter node is required to expand chapter scenes.");
+  }
+
+  const chapterScriptText =
+    stringInput(job.input.scriptText) ??
+    stringData(sourceNode, "chapterScriptText") ??
+    stringData(sourceNode, "summary") ??
+    stringData(sourceNode, "description") ??
+    "";
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "durationSec") ??
+    numberData(sourceNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
+  const sceneCount =
+    numberInput(job.input.sceneCount) ??
+    numberData(sourceNode, "sceneCount") ??
+    getDefaultSceneCount(targetDurationSec);
+  const model = stringInput(job.input.model) ?? stringData(sourceNode, "aiModel");
+  const result = await getProviders().llm.generateStoryboard({
+    scriptText: chapterScriptText,
+    sceneCount,
+    model,
+    targetDurationSec
+  });
+  const groupId = `chapter-${safeId(sourceNode.id)}`;
+  const canvas = applyStoryboard(project.canvas, sourceNode, result.data.scenes, {
+    aiModel: model,
+    groupId,
+    sourceChapterNodeId: sourceNode.id,
+    baseX: sourceNode.position.x + 360,
+    baseY: sourceNode.position.y
+  });
+
+  updateVideoProject(project.id, { canvas });
+
+  return {
+    provider: result.provider,
+    usedMock: result.usedMock,
+    chapterNodeId: sourceNode.id,
+    sceneCount: result.data.scenes.length,
+    sceneNodeIds: result.data.scenes.map((_, index) => `node-${groupId}-scene-${index + 1}`),
     scenes: result.data.scenes
   };
 }
@@ -2006,8 +2146,8 @@ function upsertExportNode(canvas: CanvasDocument, previewNode: CanvasNode) {
 function calculateNodeContentHeight(text: string | undefined): number {
   if (!text) return 200;
   const chars = String(text).length;
-  const lines = Math.max(3, Math.min(Math.ceil(chars / 18), 40));
-  return Math.max(200, Math.min(100 + lines * 22, 540));
+  const lines = Math.max(3, Math.min(Math.ceil(chars / 36), 6));
+  return Math.max(200, Math.min(100 + lines * 22, 240));
 }
 
 function upsertScriptNode(
@@ -2070,6 +2210,168 @@ function upsertScriptNode(
   };
 }
 
+function upsertStructureNode(
+  canvas: CanvasDocument,
+  sourceNode: CanvasNode | undefined,
+  existingStructureNode: CanvasNode | undefined,
+  data: Record<string, unknown>
+): CanvasDocument {
+  if (existingStructureNode) {
+    return updateNodeData(canvas, existingStructureNode.id, data);
+  }
+
+  const nodeId = "node-structure";
+  const structureNode: CanvasNode = {
+    id: nodeId,
+    kind: "structure",
+    refId: `structure-${safeId(sourceNode?.refId ?? nodeId)}`,
+    position: {
+      x: (sourceNode?.position.x ?? 360) + 380,
+      y: sourceNode?.position.y ?? 0
+    },
+    size: { width: 320, height: 180 },
+    status: "ready",
+    data: {
+      generatedBy: "create-structure-node",
+      ...data
+    }
+  };
+  const nextEdges = sourceNode
+    ? ensureCanvasEdge(canvas.edges, {
+        id: `edge-${sourceNode.id}-${nodeId}`,
+        fromNodeId: sourceNode.id,
+        toNodeId: nodeId,
+        relation: "produces"
+      })
+    : canvas.edges;
+
+  return {
+    ...canvas,
+    nodes: canvas.nodes.concat(structureNode),
+    edges: nextEdges
+  };
+}
+
+type ChapterPlan = {
+  title: string;
+  summary: string;
+  chapterScriptText: string;
+  durationSec: number;
+  sceneCount: number;
+};
+
+function applyChapters(
+  canvas: CanvasDocument,
+  sourceNode: CanvasNode | undefined,
+  chapters: ChapterPlan[],
+  options: { targetDurationSec: number; aiModel?: string }
+): CanvasDocument {
+  const sourceId = sourceNode?.id ?? "node-structure";
+  const baseX = sourceNode ? sourceNode.position.x + 380 : 1080;
+  const baseY = sourceNode ? sourceNode.position.y + 240 : 240;
+  const existingChapterIds = new Set(
+    canvas.nodes
+      .filter((node) => node.kind === "chapter" && node.data.sourceStructureNodeId === sourceId)
+      .map((node) => node.id)
+  );
+  const staleSceneNodes = canvas.nodes.filter(
+    (node) => typeof node.data.sourceChapterNodeId === "string" && existingChapterIds.has(node.data.sourceChapterNodeId)
+  );
+  const staleSceneNodeIds = new Set(staleSceneNodes.map((node) => node.id));
+  const staleSceneRefIds = new Set(
+    staleSceneNodes
+      .map((node) => node.refId)
+      .filter((refId): refId is string => typeof refId === "string" && refId.length > 0)
+  );
+  const shouldRemoveChapterOutput = (node: CanvasNode) => {
+    if (node.kind === "chapter" && node.data.sourceStructureNodeId === sourceId) {
+      return true;
+    }
+
+    if (staleSceneNodeIds.has(node.id)) {
+      return true;
+    }
+
+    const sourceSceneNodeId =
+      typeof node.data.sourceSceneNodeId === "string" ? node.data.sourceSceneNodeId : undefined;
+    const sceneId = typeof node.data.sceneId === "string" ? node.data.sceneId : undefined;
+
+    return Boolean(
+      (sourceSceneNodeId && staleSceneNodeIds.has(sourceSceneNodeId)) ||
+        (sceneId && (staleSceneNodeIds.has(sceneId) || staleSceneRefIds.has(sceneId))) ||
+        (typeof node.refId === "string" && staleSceneRefIds.has(node.refId))
+    );
+  };
+  const nodes = canvas.nodes.filter((node) => !shouldRemoveChapterOutput(node));
+  const removedNodeIds = new Set(
+    canvas.nodes.filter((node) => shouldRemoveChapterOutput(node)).map((node) => node.id)
+  );
+  const edges = canvas.edges.filter(
+    (edge) =>
+      !edge.id.startsWith(`edge-chapter-${safeId(sourceId)}-`) &&
+      !removedNodeIds.has(edge.fromNodeId) &&
+      !removedNodeIds.has(edge.toNodeId)
+  );
+  const chapterNodes: CanvasNode[] = chapters.map((chapter, index) => {
+    const chapterNumber = index + 1;
+    return {
+      id: `node-chapter-${chapterNumber}`,
+      kind: "chapter",
+      refId: `chapter-${chapterNumber}`,
+      position: {
+        x: baseX,
+        y: baseY + index * 230
+      },
+      size: { width: 320, height: 180 },
+      status: "ready",
+      data: {
+        generatedBy: "generate-chapters",
+        sourceStructureNodeId: sourceId,
+        title: `章节 ${chapterNumber}`,
+        description: chapter.title,
+        chapterTitle: chapter.title,
+        summary: chapter.summary,
+        chapterScriptText: chapter.chapterScriptText,
+        chapterIndex: chapterNumber,
+        chapterCount: chapters.length,
+        durationSec: chapter.durationSec,
+        targetDurationSec: chapter.durationSec,
+        sceneCount: chapter.sceneCount,
+        aiModel: options.aiModel
+      }
+    };
+  });
+  const chapterEdges: CanvasDocument["edges"] = sourceNode
+    ? chapterNodes.map((node, index) => ({
+        id: `edge-chapter-${safeId(sourceId)}-${index + 1}`,
+        fromNodeId: sourceNode.id,
+        toNodeId: node.id,
+        relation: "produces"
+      }))
+    : [];
+
+  return {
+    ...canvas,
+    nodes: nodes
+      .map((node) =>
+        sourceNode && node.id === sourceNode.id
+          ? {
+              ...node,
+              status: "ready" as const,
+              data: {
+                ...node.data,
+                generatedChapterCount: chapters.length,
+                targetDurationSec: options.targetDurationSec,
+                chapterCount: chapters.length
+              }
+            }
+          : node
+      )
+      .concat(chapterNodes),
+    edges: edges.concat(chapterEdges)
+  };
+}
+
 function applyStoryboard(
   canvas: CanvasDocument,
   sourceNode: CanvasNode | undefined,
@@ -2082,17 +2384,33 @@ function applyStoryboard(
     visualPrompt?: string;
     caption?: string;
   }>,
-  options: { aiModel?: string } = {}
+  options: {
+    aiModel?: string;
+    groupId?: string;
+    sourceChapterNodeId?: string;
+    baseX?: number;
+    baseY?: number;
+  } = {}
 ): CanvasDocument {
-  const baseX = sourceNode ? sourceNode.position.x + 360 : 700;
-  const baseY = sourceNode ? sourceNode.position.y + 230 : 260;
-  const nodes = canvas.nodes.filter((node) => node.data.generatedBy !== "generate-storyboard");
-  const edges = canvas.edges.filter((edge) => !edge.id.startsWith("edge-generated-storyboard-"));
+  const baseX = options.baseX ?? (sourceNode ? sourceNode.position.x + 360 : 700);
+  const baseY = options.baseY ?? (sourceNode ? sourceNode.position.y + 230 : 260);
+  const groupId = options.groupId ?? "generated-storyboard";
+  const edgePrefix = options.groupId
+    ? `edge-generated-storyboard-${safeId(groupId)}-`
+    : "edge-generated-storyboard-";
+  const nodes = canvas.nodes.filter((node) =>
+    options.groupId
+      ? node.data.generatedGroupId !== groupId
+      : node.data.generatedBy !== "generate-storyboard"
+  );
+  const edges = canvas.edges.filter((edge) => !edge.id.startsWith(edgePrefix));
   const generatedNodes: CanvasNode[] = [];
   const generatedEdges: CanvasDocument["edges"] = [];
 
   scenes.forEach((scene, index) => {
-    const sceneId = `scene-generated-${index + 1}`;
+    const sceneId = options.groupId
+      ? `${safeId(groupId)}-scene-${index + 1}`
+      : `scene-generated-${index + 1}`;
     const sceneNodeId = `node-${sceneId}`;
     const y = baseY + index * 210;
     generatedNodes.push({
@@ -2104,6 +2422,8 @@ function applyStoryboard(
       status: "ready",
       data: {
         generatedBy: "generate-storyboard",
+        generatedGroupId: groupId,
+        sourceChapterNodeId: options.sourceChapterNodeId,
         title: scene.title,
         description: scene.description,
         narration: scene.narration,
@@ -2116,7 +2436,7 @@ function applyStoryboard(
 
     if (sourceNode) {
       generatedEdges.push({
-        id: `edge-generated-storyboard-${index + 1}`,
+        id: `${edgePrefix}${index + 1}`,
         fromNodeId: sourceNode.id,
         toNodeId: sceneNodeId,
         relation: "produces"
@@ -2135,7 +2455,8 @@ function applyStoryboard(
               data: {
                 ...node.data,
                 generatedSceneCount: scenes.length,
-                aiModel: options.aiModel
+                aiModel: options.aiModel,
+                expandedGroupId: groupId
               }
             }
           : node
@@ -2143,6 +2464,81 @@ function applyStoryboard(
       .concat(generatedNodes),
     edges: edges.concat(generatedEdges)
   };
+}
+
+function createChapterPlan(
+  scriptText: string,
+  chapterCountInput: number,
+  targetDurationSec: number
+): ChapterPlan[] {
+  const chapterCount = Math.max(1, Math.min(Math.round(chapterCountInput), 24));
+  const paragraphs = splitScriptParagraphs(scriptText);
+  const durationPerChapter = Math.max(30, Math.round(targetDurationSec / chapterCount));
+
+  return Array.from({ length: chapterCount }, (_, index) => {
+    const chunk = paragraphChunk(paragraphs, index, chapterCount);
+    const fallbackTitle = `第 ${index + 1} 章`;
+    const firstLine = chunk[0] ?? fallbackTitle;
+    const title = makeChapterTitle(firstLine, index + 1);
+    const chapterScriptText = chunk.join("\n\n") || firstLine;
+
+    return {
+      title,
+      summary: summarizeText(chapterScriptText, 80),
+      chapterScriptText,
+      durationSec: durationPerChapter,
+      sceneCount: getDefaultSceneCount(durationPerChapter)
+    };
+  });
+}
+
+function getDefaultChapterCount(targetDurationSec: number) {
+  if (targetDurationSec <= 60) return 1;
+  if (targetDurationSec <= 300) return 5;
+  if (targetDurationSec <= 900) return 8;
+  return 12;
+}
+
+function getDefaultSceneCount(targetDurationSec: number) {
+  if (targetDurationSec <= 30) return 5;
+  if (targetDurationSec <= 60) return 8;
+  if (targetDurationSec <= 180) return 4;
+  if (targetDurationSec <= 300) return 6;
+  return 8;
+}
+
+function splitScriptParagraphs(scriptText: string) {
+  const paragraphs = scriptText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length > 0) {
+    return paragraphs;
+  }
+
+  const compact = scriptText.trim();
+  return compact ? compact.match(/.{1,120}/g) ?? [compact] : ["先写入本章文案，再展开分镜。"];
+}
+
+function paragraphChunk(paragraphs: string[], index: number, total: number) {
+  const start = Math.floor((paragraphs.length * index) / total);
+  const end = Math.max(start + 1, Math.floor((paragraphs.length * (index + 1)) / total));
+  return paragraphs.slice(start, end);
+}
+
+function makeChapterTitle(text: string, index: number) {
+  const cleaned = text
+    .replace(/[，。！？、,.!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const title = cleaned.slice(0, 18);
+  return title ? `${index}. ${title}` : `第 ${index} 章`;
+}
+
+function summarizeText(text: string, maxLength: number) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
 }
 
 function ensureCanvasEdge(

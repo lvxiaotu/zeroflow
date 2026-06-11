@@ -1,6 +1,6 @@
 import type { CanvasNode, CanvasNodeKind } from "@zeroflow/core";
 
-export type AiPromptDataKey = "topic" | "scriptText" | "prompt";
+export type AiPromptDataKey = "topic" | "scriptText" | "chapterScriptText" | "prompt";
 
 export function getAiPromptDataKey(kind: CanvasNodeKind): AiPromptDataKey | null {
   switch (kind) {
@@ -9,6 +9,8 @@ export function getAiPromptDataKey(kind: CanvasNodeKind): AiPromptDataKey | null
     case "script":
     case "storyboard":
       return "scriptText";
+    case "chapter":
+      return "chapterScriptText";
     case "image":
       return "prompt";
     default:
@@ -27,6 +29,8 @@ export function getAiPromptValue(node: CanvasNode) {
     case "script":
     case "storyboard":
       return firstString(node.data.scriptText, node.data.prompt);
+    case "chapter":
+      return firstString(node.data.chapterScriptText, node.data.summary, node.data.description);
     case "image":
       return firstString(node.data.prompt, node.data.visualPrompt, node.data.description);
     default:
@@ -39,6 +43,8 @@ export function getAiPromptLabel(kind: CanvasNodeKind) {
     case "script":
     case "storyboard":
       return "文案内容";
+    case "chapter":
+      return "本章文案";
     case "image":
       return "图片提示词";
     default:
@@ -53,6 +59,8 @@ export function getAiPromptPlaceholder(kind: CanvasNodeKind) {
     case "script":
     case "storyboard":
       return "直接输入或粘贴完整口播文案，写完后点击生成分镜。";
+    case "chapter":
+      return "直接编辑这一章的口播内容，写完后点击展开本章分镜。";
     case "image":
       return "描述要生成的画面、风格、主体和构图。";
     default:
@@ -64,6 +72,7 @@ export function getAiPromptRows(kind: CanvasNodeKind) {
   switch (kind) {
     case "script":
     case "storyboard":
+    case "chapter":
       return 10;
     case "image":
       return 5;

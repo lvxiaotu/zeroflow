@@ -26,7 +26,9 @@ export function getAiModelTarget(kind: CanvasNodeKind): AiModelTarget | null {
   switch (kind) {
     case "topic":
     case "script":
+    case "structure":
     case "storyboard":
+    case "chapter":
       return "llm";
     case "image":
       return "image";

@@ -67,6 +67,8 @@ import {
 } from "../canvas/aiNodeInputs";
 import {
   getTargetDurationSec,
+  getDefaultChapterCount,
+  getDefaultSceneCount,
   targetDurationOptions
 } from "../canvas/videoDurationOptions";
 import {
@@ -925,7 +927,11 @@ function TldrawNodeInspector({
         </label>
       ) : null}
 
-      {node.kind === "topic" || node.kind === "script" || node.kind === "storyboard" ? (
+      {node.kind === "topic" ||
+      node.kind === "script" ||
+      node.kind === "structure" ||
+      node.kind === "storyboard" ||
+      node.kind === "chapter" ? (
         <label>
           目标时长
           <select
@@ -942,6 +948,25 @@ function TldrawNodeInspector({
         </label>
       ) : null}
 
+      {node.kind === "script" || node.kind === "structure" ? (
+        <label>
+          章节数量
+          <input
+            max={24}
+            min={1}
+            name="chapterCount"
+            type="number"
+            value={getNumber(
+              node.data.chapterCount,
+              getDefaultChapterCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
+            onChange={(event) =>
+              onDataChange(node.id, "chapterCount", clampNumber(Number(event.currentTarget.value), 1, 24))
+            }
+          />
+        </label>
+      ) : null}
+
       {node.kind === "script" || node.kind === "storyboard" ? (
         <label>
           Scene count
@@ -953,6 +978,25 @@ function TldrawNodeInspector({
             value={getNumber(node.data.sceneCount, 5)}
             onChange={(event) =>
               onDataChange(node.id, "sceneCount", clampNumber(Number(event.currentTarget.value), 1, 12))
+            }
+          />
+        </label>
+      ) : null}
+
+      {node.kind === "chapter" ? (
+        <label>
+          本章分镜数量
+          <input
+            max={24}
+            min={1}
+            name="sceneCount"
+            type="number"
+            value={getNumber(
+              node.data.sceneCount,
+              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
+            onChange={(event) =>
+              onDataChange(node.id, "sceneCount", clampNumber(Number(event.currentTarget.value), 1, 24))
             }
           />
         </label>
@@ -1623,13 +1667,55 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   }
 
   if (node.kind === "script" || node.kind === "storyboard") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    if (node.kind === "script" && targetDurationSec > 60) {
+      return {
+        type: "create-structure-node",
+        input: {
+          scriptText: getAiPromptValue(node),
+          targetDurationSec,
+          chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+          model: getNodeAiModel(node)
+        }
+      };
+    }
+
     return {
       type: "generate-storyboard",
       input: {
         scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
         model: getNodeAiModel(node),
-        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
+        targetDurationSec
+      }
+    };
+  }
+
+  if (node.kind === "structure") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    return {
+      type: "generate-chapters",
+      input: {
+        scriptText: getString(node.data.scriptText, ""),
+        targetDurationSec,
+        chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+        model: getNodeAiModel(node)
+      }
+    };
+  }
+
+  if (node.kind === "chapter") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    return {
+      type: "expand-chapter-scenes",
+      input: {
+        scriptText: getAiPromptValue(node),
+        targetDurationSec,
+        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1717,6 +1803,8 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
     "d3NodeId",
     "threeNodeId",
     "visualNodeId",
+    "structureNodeId",
+    "chapterNodeId",
     "nodeId"
   ];
 
@@ -1735,6 +1823,11 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
   const sceneNodeIds = output?.sceneNodeIds;
   if (Array.isArray(sceneNodeIds) && typeof sceneNodeIds[0] === "string") {
     return sceneNodeIds[0];
+  }
+
+  const chapterNodeIds = output?.chapterNodeIds;
+  if (Array.isArray(chapterNodeIds) && typeof chapterNodeIds[0] === "string") {
+    return chapterNodeIds[0];
   }
 
   return undefined;
@@ -1757,7 +1850,11 @@ function getNodeRunLabel(node: CanvasNode) {
     case "topic":
       return "Generate script";
     case "script":
-      return "Generate storyboard";
+      return getTargetDurationSec(node.data.targetDurationSec) > 60 ? "生成结构" : "Generate storyboard";
+    case "structure":
+      return "生成章节";
+    case "chapter":
+      return "展开本章分镜";
     case "storyboard":
       return "Generate storyboard";
     case "caption":

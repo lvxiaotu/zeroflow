@@ -15,3 +15,18 @@ export function getTargetDurationSec(value: unknown) {
     ? duration
     : defaultTargetDurationSec;
 }
+
+export function getDefaultChapterCount(targetDurationSec: number) {
+  if (targetDurationSec <= 60) return 1;
+  if (targetDurationSec <= 300) return 5;
+  if (targetDurationSec <= 900) return 8;
+  return 12;
+}
+
+export function getDefaultSceneCount(targetDurationSec: number) {
+  if (targetDurationSec <= 30) return 5;
+  if (targetDurationSec <= 60) return 8;
+  if (targetDurationSec <= 180) return 4;
+  if (targetDurationSec <= 300) return 6;
+  return 8;
+}

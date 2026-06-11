@@ -5,7 +5,9 @@ export const defaultProjectId = "project-ascendant-intro";
 export const nodeKindLabels: Record<CanvasNodeKind, string> = {
   topic: "主题",
   script: "文案",
+  structure: "结构",
   storyboard: "分镜计划",
+  chapter: "章节",
   scene: "分镜",
   caption: "字幕",
   voice: "配音",
@@ -22,7 +24,9 @@ export const nodeKindLabels: Record<CanvasNodeKind, string> = {
 export const nodeKindDescriptions: Record<CanvasNodeKind, string> = {
   topic: "选择这条视频要讲的占星主题",
   script: "生成并编辑口播文案和节奏",
+  structure: "长视频章节结构",
   storyboard: "把文案拆成可编辑的分镜",
+  chapter: "长视频中的一个章节",
   scene: "单个视频画面",
   caption: "字幕时间轴和样式",
   voice: "配音参数",

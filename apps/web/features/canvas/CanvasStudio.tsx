@@ -46,6 +46,8 @@ import {
 } from "./aiNodeInputs";
 import {
   getTargetDurationSec,
+  getDefaultChapterCount,
+  getDefaultSceneCount,
   targetDurationOptions
 } from "./videoDurationOptions";
 
@@ -669,10 +671,13 @@ export function CanvasStudio({
                   <h2>{getNodeTitle(node)}</h2>
                   <p>{getNodeDescription(node)}</p>
                   {node.kind === "script" && node.data.scriptText ? (
-                    <pre className="node-content-preview">{String(node.data.scriptText).replace(/<[^>]+>/g, "")}</pre>
+                    <pre className="node-content-preview">{compactPreviewText(node.data.scriptText, 180)}</pre>
                   ) : null}
                   {node.kind === "scene" && node.data.narration ? (
-                    <pre className="node-content-preview">{String(node.data.narration).replace(/<[^>]+>/g, "")}</pre>
+                    <pre className="node-content-preview">{compactPreviewText(node.data.narration, 180)}</pre>
+                  ) : null}
+                  {node.kind === "chapter" && node.data.summary ? (
+                    <pre className="node-content-preview">{compactPreviewText(node.data.summary, 150)}</pre>
                   ) : null}
                   {node.kind === "topic" && node.data.topic ? (
                     <p className="node-topic-line">{String(node.data.topic)}</p>
@@ -943,7 +948,11 @@ function InspectorPanel({
         </label>
       ) : null}
 
-      {node.kind === "topic" || node.kind === "script" || node.kind === "storyboard" ? (
+      {node.kind === "topic" ||
+      node.kind === "script" ||
+      node.kind === "structure" ||
+      node.kind === "storyboard" ||
+      node.kind === "chapter" ? (
         <label>
           目标时长
           <select
@@ -960,6 +969,24 @@ function InspectorPanel({
         </label>
       ) : null}
 
+      {node.kind === "script" || node.kind === "structure" ? (
+        <label>
+          章节数量
+          <input
+            max={24}
+            min={1}
+            type="number"
+            value={getNumber(
+              node.data.chapterCount,
+              getDefaultChapterCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
+            onChange={(event) =>
+              onDataChange("chapterCount", clampNumber(Number(event.currentTarget.value), 1, 24))
+            }
+          />
+        </label>
+      ) : null}
+
       {node.kind === "script" || node.kind === "storyboard" ? (
         <label>
           分镜数量
@@ -970,6 +997,24 @@ function InspectorPanel({
             value={getNumber(node.data.sceneCount, 5)}
             onChange={(event) =>
               onDataChange("sceneCount", clampNumber(Number(event.currentTarget.value), 1, 12))
+            }
+          />
+        </label>
+      ) : null}
+
+      {node.kind === "chapter" ? (
+        <label>
+          本章分镜数量
+          <input
+            max={24}
+            min={1}
+            type="number"
+            value={getNumber(
+              node.data.sceneCount,
+              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
+            onChange={(event) =>
+              onDataChange("sceneCount", clampNumber(Number(event.currentTarget.value), 1, 24))
             }
           />
         </label>
@@ -1461,6 +1506,19 @@ function getNodeDescription(node: CanvasNode) {
   );
 }
 
+function compactPreviewText(value: unknown, limit: number) {
+  const text = String(value ?? "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.length <= limit) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, limit - 1))}...`;
+}
+
 function getCreateManualScriptJobRequest(node: CanvasNode): NodeJobRequest {
   return {
     type: "create-manual-script",
@@ -1486,13 +1544,55 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   }
 
   if (node.kind === "script" || node.kind === "storyboard") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    if (node.kind === "script" && targetDurationSec > 60) {
+      return {
+        type: "create-structure-node",
+        input: {
+          scriptText: getAiPromptValue(node),
+          targetDurationSec,
+          chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+          model: getNodeAiModel(node)
+        }
+      };
+    }
+
     return {
       type: "generate-storyboard",
       input: {
         scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
         model: getNodeAiModel(node),
-        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
+        targetDurationSec
+      }
+    };
+  }
+
+  if (node.kind === "structure") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    return {
+      type: "generate-chapters",
+      input: {
+        scriptText: getString(node.data.scriptText, ""),
+        targetDurationSec,
+        chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+        model: getNodeAiModel(node)
+      }
+    };
+  }
+
+  if (node.kind === "chapter") {
+    const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
+
+    return {
+      type: "expand-chapter-scenes",
+      input: {
+        scriptText: getAiPromptValue(node),
+        targetDurationSec,
+        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
+        model: getNodeAiModel(node)
       }
     };
   }
@@ -1556,6 +1656,11 @@ function getNodeRunLabel(node: CanvasNode) {
     case "topic":
       return "生成文案";
     case "script":
+      return getTargetDurationSec(node.data.targetDurationSec) > 60 ? "生成结构" : "生成分镜";
+    case "structure":
+      return "生成章节";
+    case "chapter":
+      return "展开本章分镜";
     case "storyboard":
       return "生成分镜";
     case "caption":
@@ -1584,6 +1689,9 @@ function getJobTypeLabel(jobType: string) {
   const labels: Record<string, string> = {
     "generate-script": "生成文案",
     "create-manual-script": "创建手写文案",
+    "create-structure-node": "创建结构",
+    "generate-chapters": "生成章节",
+    "expand-chapter-scenes": "展开章节分镜",
     "generate-storyboard": "生成分镜",
     "generate-image": "生成简笔画",
     "generate-tts": "生成配音",
@@ -1624,7 +1732,9 @@ function translateLegacyNodeTitle(title: string) {
   const labels: Record<string, string> = {
     Topic: "主题",
     Script: "文案",
+    Structure: "结构",
     Storyboard: "分镜计划",
+    Chapter: "章节",
     Scene: "分镜",
     Opening: "开场问题",
     Caption: "字幕",
@@ -1649,7 +1759,9 @@ function translateLegacyNodeDescription(description: string) {
     "Choose the topic for the video": "选择这条视频要讲的占星主题",
     "Generate and edit narration and beats": "生成并编辑口播文案和节奏",
     "Generate and refine narration and beats": "生成并优化口播文案和节奏",
+    "Long-form chapter structure": "长视频章节结构",
     "Split the script into editable scenes": "把文案拆成可编辑的分镜",
+    "A chapter in the long-form video": "长视频中的一个章节",
     "Break the script into editable visual beats": "把文案拆成可编辑的视觉段落",
     "A single visual scene": "单个视频画面",
     "Caption timing and styling": "字幕时间轴和样式",
@@ -1686,6 +1798,8 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
     "d3NodeId",
     "threeNodeId",
     "visualNodeId",
+    "structureNodeId",
+    "chapterNodeId",
     "nodeId"
   ];
 
@@ -1707,6 +1821,12 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
 
   if (Array.isArray(sceneNodeIds) && typeof sceneNodeIds[0] === "string") {
     return sceneNodeIds[0];
+  }
+
+  const chapterNodeIds = output?.chapterNodeIds;
+
+  if (Array.isArray(chapterNodeIds) && typeof chapterNodeIds[0] === "string") {
+    return chapterNodeIds[0];
   }
 
   return undefined;

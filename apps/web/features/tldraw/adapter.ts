@@ -15,32 +15,36 @@ export const nodeShapeMetaKey = "zeroflowNodeId";
 export const edgeShapeMetaKey = "zeroflowEdgeId";
 
 const kindLabels: Record<CanvasNodeKind, string> = {
-  topic: "Topic",
-  script: "Script",
-  storyboard: "Storyboard",
-  scene: "Scene",
-  caption: "Caption",
-  voice: "Voice",
-  chart: "Chart",
-  image: "Image",
+  topic: "主题",
+  script: "文案",
+  structure: "结构",
+  storyboard: "分镜计划",
+  chapter: "章节",
+  scene: "分镜",
+  caption: "字幕",
+  voice: "配音",
+  chart: "星盘",
+  image: "简笔画",
   d3: "D3 Diagram",
-  three: "Three Scene",
-  music: "Music",
-  composition: "Composition",
-  preview: "Preview",
-  export: "Export"
+  three: "三维场景",
+  music: "音乐",
+  composition: "画面合成",
+  preview: "预览",
+  export: "导出"
 };
 
 const actionLabels: Partial<Record<CanvasNodeKind, string>> = {
-  topic: "Generate script",
-  script: "Generate storyboard",
-  storyboard: "Generate storyboard",
-  caption: "Align captions",
-  voice: "Generate TTS",
-  chart: "Generate chart",
-  image: "Generate image",
-  composition: "Create preview",
-  preview: "Render still"
+  topic: "生成文案",
+  script: "生成分镜",
+  structure: "生成章节",
+  storyboard: "生成分镜",
+  chapter: "展开分镜",
+  caption: "对齐字幕",
+  voice: "生成配音",
+  chart: "生成星盘",
+  image: "生成简笔画",
+  composition: "创建预览",
+  preview: "渲染静帧"
 };
 
 export function loadCanvasIntoTldraw(editor: Editor, canvas: CanvasDocument) {
@@ -196,6 +200,10 @@ function nodeActionLabel(node: CanvasNode) {
     return stringData(node.data.exportScope) === "full" ? "Render full video" : "Render clip";
   }
 
+  if (node.kind === "script" && (numberData(node.data.targetDurationSec) ?? 0) > 60) {
+    return "生成结构";
+  }
+
   return actionLabels[node.kind] ?? "";
 }
 
@@ -268,6 +276,8 @@ function nodeDescription(node: CanvasNode) {
     stringData(node.data.prompt),
     stringData(node.data.visualPrompt),
     stringData(node.data.narration),
+    stringData(node.data.summary),
+    stringData(node.data.chapterScriptText),
     stringData(node.data.scriptText),
     typeof node.data.caption === "string" ? node.data.caption : undefined,
     stringData(caption?.text)

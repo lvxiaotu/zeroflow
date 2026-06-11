@@ -25,7 +25,7 @@ export function getProviderHealth(): ProviderHealth[] {
     },
     {
       id: "yunwu",
-      label: "云雾图像",
+      label: "Yunwu Image",
       configured: hasEnv("YUNWU_API_KEY"),
       ready: hasEnv("YUNWU_API_KEY"),
       status: hasEnv("YUNWU_API_KEY") ? "ready" : "not-configured",

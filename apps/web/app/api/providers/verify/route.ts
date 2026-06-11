@@ -1,12 +1,13 @@
 import path from "node:path";
 import { getDataDir } from "@zeroflow/db";
-import { getProviderHealth, getProviders, hasEnv, readEnv } from "@zeroflow/providers";
+import { getIndexTtsRuntimeConfig, getProviderHealth, getProviders, hasEnv } from "@zeroflow/providers";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const mode = body.mode === "live" ? "live" : "local";
   const providers = getProviders();
+  const indexTtsConfig = getIndexTtsRuntimeConfig();
   const checks: Array<Record<string, unknown>> = [];
 
   const chartOutputPath = path.join(getDataDir(), "provider-checks", "astrochart.svg");
@@ -50,9 +51,9 @@ export async function POST(request: NextRequest) {
 
   if (mode === "live" && hasEnv("DEEPSEEK_API_KEY")) {
     const script = await providers.llm.generateScript({
-      topic: "上升星座是什么？",
+      topic: "What is the ascendant sign in astrology?",
       targetDurationSec: 20,
-      tone: "清楚、温和、适合占星小白"
+      tone: "clear, warm, and beginner friendly"
     });
     checks.push({
       id: "deepseek",
@@ -60,6 +61,19 @@ export async function POST(request: NextRequest) {
       provider: script.provider,
       usedMock: script.usedMock,
       title: script.data.title
+    });
+
+    const storyboard = await providers.llm.generateStoryboard({
+      scriptText: script.data.scriptText,
+      sceneCount: 3,
+      targetDurationSec: 20
+    });
+    checks.push({
+      id: "deepseek-storyboard",
+      ok: !storyboard.usedMock && storyboard.data.scenes.length > 0,
+      provider: storyboard.provider,
+      usedMock: storyboard.usedMock,
+      scenes: storyboard.data.scenes.length
     });
   }
 
@@ -80,14 +94,12 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  if (mode === "live" && hasEnv("RUNNINGHUB_API_KEY")) {
-    const referenceAudioPath = readEnv("INDEXTTS_REFERENCE_AUDIO_PATH");
-    const referenceAudioName = readEnv("INDEXTTS_REFERENCE_AUDIO_NAME");
+  if (mode === "live" && indexTtsConfig.runningHubApiKey) {
     const audio = await providers.tts.generateVoiceover({
-      text: "这是一段占星教学配音链路检查。",
+      text: "This is a short astrology teaching voiceover provider check.",
       outputPath: path.join(getDataDir(), "provider-checks", "runninghub-check.mp3"),
-      referenceAudioPath,
-      referenceAudioName,
+      referenceAudioPath: indexTtsConfig.referenceAudioPath,
+      referenceAudioName: indexTtsConfig.referenceAudioName,
       dryRun: body.ttsDryRun !== false
     });
     checks.push({

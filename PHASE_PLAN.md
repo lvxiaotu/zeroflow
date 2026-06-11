@@ -1879,3 +1879,33 @@ Remaining:
 Next:
 - Decide whether ordinary Studio should become a full parity editor or remain the simpler operational view while tldraw is the advanced canvas.
 ```
+
+## 12.13 P1 Live Provider Closure
+
+```txt
+Date: 2026-06-11
+Phase: P1 real AI provider configuration and verification
+Done:
+- Saved local default provider configuration in ignored .env.local files at the repo root and apps/web so Next.js dev reads the same DeepSeek/Yunwu/IndexTTS defaults.
+- DeepSeek health now reports configured=true, ready=true in the current dev server.
+- Yunwu Image health now reports configured=true, ready=true in the current dev server.
+- RunningHub IndexTTS remains ready through the existing G:\ob-book\indextts-cli runtime configuration.
+- AstroChart remains ready and local.
+- /api/providers/verify live mode now checks both DeepSeek script generation and DeepSeek storyboard generation.
+- /api/providers/verify live mode now checks RunningHub through the shared IndexTTS runtime config instead of only raw process env.
+- Provider diagnostics label for Yunwu is ASCII-safe as Yunwu Image.
+Validation:
+- GET /api/providers/check returned ready for DeepSeek, Yunwu Image, RunningHub IndexTTS, and AstroChart SVG.
+- POST /api/providers/verify mode=live, ttsDryRun=true returned ok=true and usedMock=false for deepseek, deepseek-storyboard, yunwu, and runninghub.
+- POST /api/providers/verify mode=live returned ok=true for astrochart and astrochart-birth.
+- Generated provider check artifacts: data/provider-checks/yunwu.png, data/provider-checks/runninghub-check.mp3.runninghub/manifest.json, data/provider-checks/astrochart-birth.svg.
+- pnpm typecheck
+- pnpm lint
+Secret handling:
+- API keys are saved only in ignored local env files and are not committed to git.
+- Documentation records provider status and variable names only, never key values.
+Remaining:
+- Full real TTS audio generation still requires turning off IndexTTS dry-run deliberately.
+Next:
+- Use the now-ready providers from the progressive canvas workflow: Topic -> Script -> Storyboard -> Scene resources -> Composition -> Preview -> Export.
+```

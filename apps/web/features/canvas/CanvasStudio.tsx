@@ -13,7 +13,7 @@ import {
 import { Player } from "@remotion/player";
 import { AstroVideoComposition, getCompositionSize } from "@zeroflow/remotion-video";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import {
   fetchProviderHealth,
   getLiveProviderRunGuard,
@@ -88,6 +88,7 @@ export function CanvasStudio({
   const storageKey = `${storagePrefix}${projectId}`;
   const [canvasDoc, setCanvasDoc] = useState<CanvasDocument>(defaultCanvasDocument);
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(initialNodeId);
+  const [expandedNodeId, setExpandedNodeId] = useState<string | undefined>();
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [statusText, setStatusText] = useState("Canvas ready");
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
@@ -215,6 +216,7 @@ export function CanvasStudio({
   function resetCanvas() {
     setCanvasDoc(defaultCanvasDocument);
     setSelectedNodeId(resolveInitialCanvasNodeId(defaultCanvasDocument.nodes));
+    setExpandedNodeId(undefined);
     setSaveState("unsaved");
     setStatusText("Canvas reset");
   }
@@ -237,6 +239,7 @@ export function CanvasStudio({
     canvasRef.current = parsed.data;
     localStorage.setItem(storageKey, JSON.stringify(parsed.data));
     setSelectedNodeId(resolveInitialCanvasNodeId(parsed.data.nodes, selectNodeId ?? selectedNodeId));
+    setExpandedNodeId(undefined);
     return parsed.data;
   }
 
@@ -386,6 +389,9 @@ export function CanvasStudio({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (node.id !== selectedNodeId) {
+      setExpandedNodeId(undefined);
+    }
     setSelectedNodeId(node.id);
     dragStateRef.current = {
       kind: "node",
@@ -396,6 +402,26 @@ export function CanvasStudio({
       startPosition: node.position,
       zoom: canvasDoc.viewport.zoom
     };
+  }
+
+  function handleNodeDoubleClick(event: MouseEvent<HTMLElement>, node: CanvasNode) {
+    if (isInlineEditorTarget(event.target)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dragStateRef.current = null;
+    setSelectedNodeId(node.id);
+    setExpandedNodeId((current) => (current === node.id ? undefined : node.id));
+  }
+
+  function handleStudioPointerDownCapture(event: PointerEvent<HTMLElement>) {
+    if (isWorkflowNodeTarget(event.target)) {
+      return;
+    }
+
+    setExpandedNodeId(undefined);
   }
 
   function handleNodePointerMove(event: PointerEvent<HTMLElement>) {
@@ -447,6 +473,8 @@ export function CanvasStudio({
     }
 
     event.preventDefault();
+    setSelectedNodeId(undefined);
+    setExpandedNodeId(undefined);
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStateRef.current = {
       kind: "viewport",
@@ -490,7 +518,7 @@ export function CanvasStudio({
   }
 
   return (
-    <main className="studio-shell">
+    <main className="studio-shell" onPointerDownCapture={handleStudioPointerDownCapture}>
       <aside className="sidebar" aria-label="Workspace sidebar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true" />
@@ -566,8 +594,14 @@ export function CanvasStudio({
           >
             <svg className="edge-layer" viewBox="0 0 2400 1600" aria-hidden="true">
               {canvasDoc.edges.map((edge) => {
-                const fromNode = canvasDoc.nodes.find((node) => node.id === edge.fromNodeId);
-                const toNode = canvasDoc.nodes.find((node) => node.id === edge.toNodeId);
+                const fromNode = getDisplayNodeForEdge(
+                  canvasDoc.nodes.find((node) => node.id === edge.fromNodeId),
+                  expandedNodeId
+                );
+                const toNode = getDisplayNodeForEdge(
+                  canvasDoc.nodes.find((node) => node.id === edge.toNodeId),
+                  expandedNodeId
+                );
 
                 if (!fromNode || !toNode) {
                   return null;
@@ -589,41 +623,75 @@ export function CanvasStudio({
                 );
               })}
             </svg>
-            {canvasDoc.nodes.map((node) => (
-              <article
-                key={node.id}
-                className="workflow-node"
-                data-kind={node.kind}
-                data-selected={node.id === selectedNodeId}
-                onPointerDown={(event) => handleNodePointerDown(event, node)}
-                onPointerMove={handleNodePointerMove}
-                onPointerUp={handleNodePointerUp}
-                onPointerCancel={handleNodePointerUp}
-                style={{
-                  left: `${node.position.x}px`,
-                  top: `${node.position.y}px`,
-                  width: `${node.size.width}px`,
-                  minHeight: `${node.size.height}px`
-                }}
-              >
-                <span className="node-step">{nodeKindLabels[node.kind].slice(0, 2)}</span>
-                <h2>{getNodeTitle(node)}</h2>
-                <p>{getNodeDescription(node)}</p>
-                {node.kind === "script" && node.data.scriptText ? (
-                  <pre className="node-content-preview">{String(node.data.scriptText).replace(/<[^>]+>/g, "")}</pre>
-                ) : null}
-                {node.kind === "scene" && node.data.narration ? (
-                  <pre className="node-content-preview">{String(node.data.narration).replace(/<[^>]+>/g, "")}</pre>
-                ) : null}
-                {node.kind === "topic" && node.data.topic ? (
-                  <p className="node-topic-line">{String(node.data.topic)}</p>
-                ) : null}
-                <footer>
-                  <small>{node.kind}</small>
-                  <span data-status={node.status}>{node.status}</span>
-                </footer>
-              </article>
-            ))}
+            {canvasDoc.nodes.map((node) => {
+              const isExpanded = node.id === expandedNodeId;
+              const displaySize = getDisplayNodeSize(node, isExpanded);
+
+              return (
+                <article
+                  key={node.id}
+                  className="workflow-node"
+                  data-expanded={isExpanded}
+                  data-kind={node.kind}
+                  data-selected={node.id === selectedNodeId}
+                  onDoubleClick={(event) => handleNodeDoubleClick(event, node)}
+                  onPointerDown={(event) => handleNodePointerDown(event, node)}
+                  onPointerMove={handleNodePointerMove}
+                  onPointerUp={handleNodePointerUp}
+                  onPointerCancel={handleNodePointerUp}
+                  style={{
+                    left: `${node.position.x}px`,
+                    top: `${node.position.y}px`,
+                    width: `${displaySize.width}px`,
+                    minHeight: `${displaySize.height}px`
+                  }}
+                >
+                  <span className="node-step">{nodeKindLabels[node.kind].slice(0, 2)}</span>
+                  <h2>{getNodeTitle(node)}</h2>
+                  <p>{getNodeDescription(node)}</p>
+                  {node.kind === "script" && node.data.scriptText ? (
+                    <pre className="node-content-preview">{String(node.data.scriptText).replace(/<[^>]+>/g, "")}</pre>
+                  ) : null}
+                  {node.kind === "scene" && node.data.narration ? (
+                    <pre className="node-content-preview">{String(node.data.narration).replace(/<[^>]+>/g, "")}</pre>
+                  ) : null}
+                  {node.kind === "topic" && node.data.topic ? (
+                    <p className="node-topic-line">{String(node.data.topic)}</p>
+                  ) : null}
+                  <footer>
+                    <small>{node.kind}</small>
+                    <span data-status={node.status}>{node.status}</span>
+                  </footer>
+                  {isExpanded ? (
+                    <InspectorPanel
+                      node={node}
+                      previewSpec={previewSpec}
+                      providerHealth={providerHealth}
+                      running={runningNodeId === node.id}
+                      statusText={statusText}
+                      variant="inline"
+                      onNodeChange={(key, value) => {
+                        updateNode(node.id, (currentNode) => ({ ...currentNode, [key]: value }));
+                      }}
+                      onDataChange={(key, value) => {
+                        updateNode(node.id, (currentNode) => ({
+                          ...currentNode,
+                          data: { ...currentNode.data, [key]: value }
+                        }));
+                      }}
+                      onDataReplace={(value) => {
+                        updateNode(node.id, (currentNode) => ({
+                          ...currentNode,
+                          data: value
+                        }));
+                      }}
+                      onRunNode={(nodeId) => void runNodeAction(nodeId)}
+                      onRunNodeJob={(nodeId, request) => void runNodeJobRequest(nodeId, request)}
+                    />
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -669,13 +737,15 @@ function InspectorPanel({
   onDataChange,
   onDataReplace,
   onRunNode,
-  onRunNodeJob
+  onRunNodeJob,
+  variant = "side"
 }: {
   node: CanvasNode | null;
   previewSpec: AstroVideoSpec;
   providerHealth: ClientProviderHealth[];
   running: boolean;
   statusText: string;
+  variant?: "side" | "inline";
   onNodeChange: <TKey extends keyof CanvasNode>(key: TKey, value: CanvasNode[TKey]) => void;
   onDataChange: (key: string, value: unknown) => void;
   onDataReplace: (value: CanvasNode["data"]) => void;
@@ -683,12 +753,17 @@ function InspectorPanel({
   onRunNodeJob: (nodeId: string, request: NodeJobRequest) => void;
 }) {
   const [rawData, setRawData] = useState(node ? JSON.stringify(node.data, null, 2) : "{}");
+  const isInline = variant === "inline";
 
   useEffect(() => {
     setRawData(node ? JSON.stringify(node.data, null, 2) : "{}");
   }, [node?.id]);
 
   if (!node) {
+    if (isInline) {
+      return null;
+    }
+
     return (
       <aside className="inspector" aria-label="Inspector">
         <header>
@@ -705,13 +780,12 @@ function InspectorPanel({
     ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
     : null;
   const assetUrl = getNodeAssetUrl(node);
-
-  return (
-    <aside className="inspector" aria-label="Inspector">
+  const content = (
+    <>
       <header>
-        <span>Inspector</span>
+        <span>{isInline ? "Inline editor" : "Inspector"}</span>
         <strong>{nodeKindLabels[node.kind]}</strong>
-        <p>{node.id}</p>
+        <p>{isInline ? "Editing this card" : node.id}</p>
       </header>
 
       {nodeJobRequest ? (
@@ -1092,50 +1166,52 @@ function InspectorPanel({
         </div>
       ) : null}
 
-      <div className="inspector-grid">
-        <label>
-          X
-          <input
-            type="number"
-            value={node.position.x}
-            onChange={(event) =>
-              onNodeChange("position", { ...node.position, x: Number(event.currentTarget.value) })
-            }
-          />
-        </label>
-        <label>
-          Y
-          <input
-            type="number"
-            value={node.position.y}
-            onChange={(event) =>
-              onNodeChange("position", { ...node.position, y: Number(event.currentTarget.value) })
-            }
-          />
-        </label>
-        <label>
-          Width
-          <input
-            min={120}
-            type="number"
-            value={node.size.width}
-            onChange={(event) =>
-              onNodeChange("size", { ...node.size, width: Number(event.currentTarget.value) })
-            }
-          />
-        </label>
-        <label>
-          Height
-          <input
-            min={88}
-            type="number"
-            value={node.size.height}
-            onChange={(event) =>
-              onNodeChange("size", { ...node.size, height: Number(event.currentTarget.value) })
-            }
-          />
-        </label>
-      </div>
+      {!isInline ? (
+        <div className="inspector-grid">
+          <label>
+            X
+            <input
+              type="number"
+              value={node.position.x}
+              onChange={(event) =>
+                onNodeChange("position", { ...node.position, x: Number(event.currentTarget.value) })
+              }
+            />
+          </label>
+          <label>
+            Y
+            <input
+              type="number"
+              value={node.position.y}
+              onChange={(event) =>
+                onNodeChange("position", { ...node.position, y: Number(event.currentTarget.value) })
+              }
+            />
+          </label>
+          <label>
+            Width
+            <input
+              min={120}
+              type="number"
+              value={node.size.width}
+              onChange={(event) =>
+                onNodeChange("size", { ...node.size, width: Number(event.currentTarget.value) })
+              }
+            />
+          </label>
+          <label>
+            Height
+            <input
+              min={88}
+              type="number"
+              value={node.size.height}
+              onChange={(event) =>
+                onNodeChange("size", { ...node.size, height: Number(event.currentTarget.value) })
+              }
+            />
+          </label>
+        </div>
+      ) : null}
 
       {assetUrl ? (
         <section className="chart-result">
@@ -1144,29 +1220,52 @@ function InspectorPanel({
         </section>
       ) : null}
 
-      <label>
-        Raw data
-        <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
-      </label>
-      <button
-        type="button"
-        onClick={() => {
-          try {
-            const parsed = JSON.parse(rawData) as unknown;
-            const parsedData = recordData(parsed);
+      {!isInline ? (
+        <>
+          <label>
+            Raw data
+            <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                const parsed = JSON.parse(rawData) as unknown;
+                const parsedData = recordData(parsed);
 
-            if (parsedData) {
-              onDataReplace(parsedData);
-            }
-          } catch {
-            // ignore parse errors for now
-          }
-        }}
+                if (parsedData) {
+                  onDataReplace(parsedData);
+                }
+              } catch {
+                // ignore parse errors for now
+              }
+            }}
+          >
+            Apply JSON
+          </button>
+
+          <VideoPreviewPanel previewSpec={previewSpec} />
+        </>
+      ) : null}
+    </>
+  );
+
+  if (isInline) {
+    return (
+      <section
+        className="inspector node-inline-editor"
+        aria-label="Inline node editor"
+        onDoubleClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
       >
-        Apply JSON
-      </button>
+        {content}
+      </section>
+    );
+  }
 
-      <VideoPreviewPanel previewSpec={previewSpec} />
+  return (
+    <aside className="inspector" aria-label="Inspector">
+      {content}
     </aside>
   );
 }
@@ -1208,6 +1307,39 @@ function resolveInitialCanvasNodeId(nodes: CanvasNode[], nodeId?: string) {
   }
 
   return nodes[0]?.id;
+}
+
+function getDisplayNodeSize(node: CanvasNode, expanded: boolean): CanvasNode["size"] {
+  if (!expanded) {
+    return node.size;
+  }
+
+  return {
+    width: Math.max(node.size.width, 420),
+    height: Math.max(node.size.height, 560)
+  };
+}
+
+function getDisplayNodeForEdge(node: CanvasNode | undefined, expandedNodeId: string | undefined) {
+  if (!node) {
+    return null;
+  }
+
+  return {
+    ...node,
+    size: getDisplayNodeSize(node, node.id === expandedNodeId)
+  };
+}
+
+function isWorkflowNodeTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest(".workflow-node"));
+}
+
+function isInlineEditorTarget(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement &&
+    Boolean(target.closest(".node-inline-editor, input, textarea, select, button, a"))
+  );
 }
 
 function getString(value: unknown, fallback: string) {

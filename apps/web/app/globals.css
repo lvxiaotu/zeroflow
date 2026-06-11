@@ -336,6 +336,22 @@ a {
     var(--shadow);
 }
 
+.workflow-node[data-expanded="true"] {
+  z-index: 5;
+  gap: 10px;
+  border-color: var(--accent-strong);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.workflow-node[data-expanded="true"] .node-content-preview {
+  flex: 0 0 auto;
+  max-height: 84px;
+}
+
+.workflow-node[data-expanded="true"] footer {
+  margin-top: 6px;
+}
+
 .workflow-node[data-kind="caption"],
 .workflow-node[data-kind="voice"] {
   border-color: rgba(200, 148, 55, 0.32);
@@ -713,6 +729,50 @@ a {
   padding: 10px;
   resize: vertical;
   line-height: 1.45;
+}
+
+.node-inline-editor {
+  width: 100%;
+  min-height: 0;
+  max-height: 350px;
+  margin-top: 8px;
+  padding: 14px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 7px;
+  background: #f8faf6;
+  backdrop-filter: none;
+  box-shadow: none;
+  cursor: default;
+  touch-action: auto;
+  user-select: text;
+}
+
+.node-inline-editor header strong {
+  font-size: 15px;
+}
+
+.node-inline-editor header p {
+  margin-top: 4px;
+}
+
+.node-inline-editor label,
+.node-inline-editor input,
+.node-inline-editor select,
+.node-inline-editor textarea,
+.node-inline-editor button {
+  user-select: text;
+}
+
+.node-inline-editor textarea {
+  max-height: 140px;
+}
+
+.node-inline-editor .inspector-grid,
+.node-inline-editor .inspector-checkbox-grid,
+.node-inline-editor .scene-resource-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .inspector select {

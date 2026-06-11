@@ -281,6 +281,31 @@ export function CanvasStudio({
     }));
   }
 
+  function deleteNode(nodeId: string) {
+    const node = canvasRef.current.nodes.find((item) => item.id === nodeId);
+
+    if (!node) {
+      setStatusText("这个节点不存在");
+      return;
+    }
+
+    const confirmed = window.confirm(`删除节点“${getNodeTitle(node)}”？相关连线也会一起删除。`);
+
+    if (!confirmed) {
+      setStatusText("删除已取消");
+      return;
+    }
+
+    commitCanvas((current) => ({
+      ...current,
+      nodes: current.nodes.filter((item) => item.id !== nodeId),
+      edges: current.edges.filter((edge) => edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId)
+    }));
+    setSelectedNodeId((current) => (current === nodeId ? undefined : current));
+    setExpandedNodeId((current) => (current === nodeId ? undefined : current));
+    setStatusText(`已删除节点：${getNodeTitle(node)}`);
+  }
+
   function updateCanvasDuringDrag(updater: (current: CanvasDocument) => CanvasDocument) {
     setCanvasDoc((current) => {
       const next = updater(current);
@@ -695,6 +720,7 @@ export function CanvasStudio({
                       }}
                       onRunNode={(nodeId) => void runNodeAction(nodeId)}
                       onRunNodeJob={(nodeId, request) => void runNodeJobRequest(nodeId, request)}
+                      onDeleteNode={deleteNode}
                     />
                   ) : null}
                 </article>
@@ -730,6 +756,7 @@ export function CanvasStudio({
         }}
         onRunNode={(nodeId) => void runNodeAction(nodeId)}
         onRunNodeJob={(nodeId, request) => void runNodeJobRequest(nodeId, request)}
+        onDeleteNode={deleteNode}
       />
     </main>
   );
@@ -746,6 +773,7 @@ function InspectorPanel({
   onDataReplace,
   onRunNode,
   onRunNodeJob,
+  onDeleteNode,
   variant = "side"
 }: {
   node: CanvasNode | null;
@@ -759,6 +787,7 @@ function InspectorPanel({
   onDataReplace: (value: CanvasNode["data"]) => void;
   onRunNode: (nodeId: string) => void;
   onRunNodeJob: (nodeId: string, request: NodeJobRequest) => void;
+  onDeleteNode: (nodeId: string) => void;
 }) {
   const [rawData, setRawData] = useState(node ? JSON.stringify(node.data, null, 2) : "{}");
   const isInline = variant === "inline";
@@ -795,6 +824,12 @@ function InspectorPanel({
         <strong>{nodeKindLabels[node.kind]}</strong>
         <p>{isInline ? "正在编辑这张卡片" : node.id}</p>
       </header>
+
+      <section className="node-danger-actions">
+        <button disabled={running} type="button" onClick={() => onDeleteNode(node.id)}>
+          删除节点
+        </button>
+      </section>
 
       {nodeJobRequest ? (
         <section className="job-actions">

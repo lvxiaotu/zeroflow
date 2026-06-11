@@ -1200,6 +1200,25 @@ a {
   background: #b98220;
 }
 
+.node-danger-actions {
+  display: grid;
+}
+
+.node-danger-actions button {
+  min-height: 36px;
+  border: 1px solid rgba(154, 53, 46, 0.28);
+  border-radius: 7px;
+  background: #fff6f4;
+  color: #9a352e;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.node-danger-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .scene-resource-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

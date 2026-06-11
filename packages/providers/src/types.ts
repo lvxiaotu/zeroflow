@@ -40,6 +40,7 @@ export type LlmProvider = {
   generateScript(input: {
     topic: string;
     model?: string;
+    scriptProfileId?: string;
     targetDurationSec?: number;
     tone?: string;
     audience?: string;

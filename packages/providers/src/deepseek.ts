@@ -1,3 +1,4 @@
+import { getScriptPromptProfile } from "@zeroflow/core";
 import { readEnv } from "./env";
 import { createMockLlmProvider } from "./mock";
 import type { GeneratedScript, GeneratedStoryboard, LlmProvider, ProviderResult } from "./types";
@@ -38,26 +39,36 @@ export function createDeepSeekProvider(): LlmProvider {
         yunwuApiKey,
         yunwuBaseUrl
       });
+      const profile = getScriptPromptProfile(input.scriptProfileId);
       const prompt = [
-        "请为一个占星教学短视频生成完整教学文案。输出严格 JSON，不要 Markdown。",
+        "请根据用户输入生成一段占星教学短视频口播文案。输出严格 JSON，不要 Markdown。",
+        "重要：用户输入是创作简报，不一定只是标题。你需要提炼核心选题，不要把整段用户输入反复写进文案。",
         `主题：${input.topic}`,
+        `文案风格：${profile.label}`,
+        `风格说明：${profile.description}`,
         `目标时长：${input.targetDurationSec ?? 45} 秒`,
         `语气：${input.tone ?? "温和、清楚、适合占星小白"}`,
         `受众：${input.audience ?? "占星小白"}`,
-        '要求：',
-        '- 这是一篇面向零基础小白的占星教学短视频口播文案',
-        '- scriptText 必须是一段完整的、可直接朗读的口播文案，300-500 字',
-        '- 结构要求：以 hook（悬念/提问开场）→ 核心概念解释 → 深入讲解 → 实用例子/类比 → 总结收尾',
-        '- 语言口语化、有节奏感，适合短视频旁白风格',
-        '- 用具体例子或生活化比喻来解释抽象占星概念',
-        'JSON 字段：title（视频标题）, hook（开场悬念句50字以内）, scriptText（完整口播文案）, tone（语气风格描述）, targetDurationSec（目标时长秒数）'
+        "风格规则：",
+        ...profile.styleRules.map((rule) => `- ${rule}`),
+        "推荐结构：",
+        ...profile.structure.map((rule, index) => `${index + 1}. ${rule}`),
+        "禁止：",
+        ...profile.avoidRules.map((rule) => `- ${rule}`),
+        "输出要求：",
+        "- scriptText 必须是一段完整的、可直接朗读的口播文案。",
+        "- 45 秒约 180-260 个汉字，60 秒约 260-360 个汉字，不要写成长文章。",
+        "- 每 1-2 句自然分段，方便后续切分镜。",
+        "- title 要从用户输入中提炼，不要照抄一整段需求。",
+        "- hook 必须 50 字以内，不能和 title 完全相同。",
+        'JSON 字段：title（视频标题）, hook（开场钩子）, scriptText（完整口播文案）, tone（语气风格描述）, targetDurationSec（目标时长秒数）'
       ].join("\n");
       const result = await completeJson<GeneratedScript>({
         ...backend,
         messages: [
           {
             role: "system",
-            content: "你是资深占星教学短视频编导，擅长把抽象占星概念讲得准确、温和、可视化。你的文案特点是：1) 每集围绕一个核心知识点展开 2) 开头用问题或现象抓住注意力 3) 用生活化比喻解释专业术语 4) 节奏分明、口语流畅 5) 结尾有总结或预告。文案长度对应 45-60 秒口播。"
+            content: profile.systemRole
           },
           { role: "user", content: prompt }
         ],

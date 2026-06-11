@@ -1,7 +1,14 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import type { AstroVideoSpec, CanvasDocument, CanvasNode, Job, SceneSpec } from "@zeroflow/core";
+import {
+  defaultScriptPromptProfileId,
+  type AstroVideoSpec,
+  type CanvasDocument,
+  type CanvasNode,
+  type Job,
+  type SceneSpec
+} from "@zeroflow/core";
 import {
   addProjectAssetRef,
   createProjectAsset,
@@ -119,9 +126,16 @@ async function generateScript(job: Job) {
     stringData(sourceNode, "aiModel") ??
     stringData(topicNode, "aiModel") ??
     stringData(scriptNode, "aiModel");
+  const scriptProfileId =
+    stringInput(job.input.scriptProfileId) ??
+    stringData(sourceNode, "scriptProfileId") ??
+    stringData(topicNode, "scriptProfileId") ??
+    stringData(scriptNode, "scriptProfileId") ??
+    defaultScriptPromptProfileId;
   const result = await getProviders().llm.generateScript({
     topic,
     model,
+    scriptProfileId,
     targetDurationSec:
       numberInput(job.input.targetDurationSec) ??
       numberData(sourceNode, "targetDurationSec") ??
@@ -141,6 +155,7 @@ async function generateScript(job: Job) {
     targetDurationSec: result.data.targetDurationSec,
     sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
     aiModel: model,
+    scriptProfileId,
     provider: result.provider,
     usedMock: result.usedMock
   });

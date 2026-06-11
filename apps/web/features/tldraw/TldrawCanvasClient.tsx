@@ -3,6 +3,8 @@
 import {
   canvasDocumentSchema,
   compileCanvasToAstroVideoSpec,
+  defaultScriptPromptProfileId,
+  scriptPromptProfiles,
   type CanvasDocument,
   type CanvasNode
 } from "@zeroflow/core";
@@ -888,6 +890,23 @@ function TldrawNodeInspector({
         </label>
       ) : null}
 
+      {node.kind === "topic" ? (
+        <label>
+          文案风格
+          <select
+            name="scriptProfileId"
+            value={getString(node.data.scriptProfileId, defaultScriptPromptProfileId)}
+            onChange={(event) => onDataChange(node.id, "scriptProfileId", event.currentTarget.value)}
+          >
+            {scriptPromptProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
       {node.kind === "script" || node.kind === "storyboard" ? (
         <label>
           Scene count
@@ -1550,7 +1569,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       type: "generate-script",
       input: {
         topic: getAiPromptValue(node) || "Astrology teaching short",
-        model: getNodeAiModel(node)
+        model: getNodeAiModel(node),
+        scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId)
       }
     };
   }

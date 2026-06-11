@@ -69,13 +69,21 @@ const defaultChartBirthData = {
 };
 
 const sceneResourceLabels: Record<SceneResourceJobId, string> = {
-  caption: "Caption",
-  voice: "Voice",
-  chart: "Chart",
-  image: "Image",
-  d3: "D3",
-  three: "Three",
-  composition: "Composition"
+  caption: "字幕",
+  voice: "配音",
+  chart: "星盘",
+  image: "简笔画",
+  d3: "D3 图表",
+  three: "三维场景",
+  composition: "画面合成"
+};
+
+const saveStateLabels: Record<SaveState, string> = {
+  saved: "已保存",
+  saving: "保存中",
+  unsaved: "未保存",
+  restored: "已恢复",
+  error: "异常"
 };
 
 export function CanvasStudio({
@@ -90,7 +98,7 @@ export function CanvasStudio({
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(initialNodeId);
   const [expandedNodeId, setExpandedNodeId] = useState<string | undefined>();
   const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [statusText, setStatusText] = useState("Canvas ready");
+  const [statusText, setStatusText] = useState("画布已就绪");
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
   const [providerHealth, setProviderHealth] = useState<ClientProviderHealth[]>([]);
   const canvasRef = useRef<CanvasDocument>(defaultCanvasDocument);
@@ -111,7 +119,7 @@ export function CanvasStudio({
             setSelectedNodeId(resolveInitialCanvasNodeId(parsed.data.nodes, initialNodeId));
             localStorage.setItem(storageKey, JSON.stringify(parsed.data));
             setSaveState("restored");
-            setStatusText("Project restored");
+            setStatusText("项目已恢复");
             return;
           }
         }
@@ -130,7 +138,7 @@ export function CanvasStudio({
           setCanvasDoc(parsed.data);
           setSelectedNodeId(resolveInitialCanvasNodeId(parsed.data.nodes, initialNodeId));
           setSaveState("restored");
-          setStatusText("Local draft restored");
+          setStatusText("本地草稿已恢复");
         }
       } catch {
         localStorage.removeItem(storageKey);
@@ -178,7 +186,7 @@ export function CanvasStudio({
   async function saveCanvasAsync() {
     const currentCanvas = canvasRef.current;
     setSaveState("saving");
-    setStatusText("Saving canvas");
+    setStatusText("正在保存画布");
     localStorage.setItem(storageKey, JSON.stringify(currentCanvas));
 
     try {
@@ -189,7 +197,7 @@ export function CanvasStudio({
       });
 
       if (!response.ok) {
-        throw new Error("canvas save failed");
+        throw new Error("画布保存失败");
       }
 
       const payload = (await response.json()) as { project?: { canvas?: unknown } };
@@ -200,11 +208,11 @@ export function CanvasStudio({
       canvasRef.current = savedCanvas;
       localStorage.setItem(storageKey, JSON.stringify(savedCanvas));
       setSaveState("saved");
-      setStatusText("Canvas saved");
+      setStatusText("画布已保存");
       return savedCanvas;
     } catch {
       setSaveState("error");
-      setStatusText("Canvas save failed");
+      setStatusText("画布保存失败");
       return null;
     }
   }
@@ -218,21 +226,21 @@ export function CanvasStudio({
     setSelectedNodeId(resolveInitialCanvasNodeId(defaultCanvasDocument.nodes));
     setExpandedNodeId(undefined);
     setSaveState("unsaved");
-    setStatusText("Canvas reset");
+    setStatusText("画布已重置");
   }
 
   async function loadProjectCanvas(selectNodeId?: string) {
     const response = await fetch(`/api/project?projectId=${encodeURIComponent(projectId)}`);
 
     if (!response.ok) {
-      throw new Error("project request failed");
+      throw new Error("项目请求失败");
     }
 
     const payload = (await response.json()) as { project?: { canvas?: unknown } };
     const parsed = canvasDocumentSchema.safeParse(payload.project?.canvas);
 
     if (!parsed.success) {
-      throw new Error("project canvas is invalid");
+      throw new Error("项目画布数据无效");
     }
 
     setCanvasDoc(parsed.data);
@@ -286,7 +294,7 @@ export function CanvasStudio({
     const draftNode = canvasRef.current.nodes.find((node) => node.id === nodeId);
 
     if (!draftNode) {
-      setStatusText("This node has no runnable job yet");
+      setStatusText("这个节点还没有可运行任务");
       return;
     }
 
@@ -297,7 +305,7 @@ export function CanvasStudio({
     );
 
     if (liveProviderGuard && !window.confirm(liveProviderConfirmationMessage(liveProviderGuard))) {
-      setStatusText(`${liveProviderGuard.providerLabel} run cancelled`);
+      setStatusText(`${liveProviderGuard.providerLabel} 运行已取消`);
       return;
     }
 
@@ -306,13 +314,13 @@ export function CanvasStudio({
     const node = currentCanvas.nodes.find((item) => item.id === nodeId);
 
     if (!node) {
-      setStatusText("This node has no runnable job yet");
+      setStatusText("这个节点还没有可运行任务");
       return;
     }
 
     setSaveState("saving");
     setRunningNodeId(node.id);
-    setStatusText(`Running ${draftJobRequest.type}`);
+    setStatusText(`正在运行：${getJobTypeLabel(draftJobRequest.type)}`);
 
     try {
       const jobInput = markLiveProviderConfirmed(
@@ -337,8 +345,8 @@ export function CanvasStudio({
         };
         throw new Error(
           payload.providerRisk?.providerLabel
-            ? `${payload.providerRisk.providerLabel} confirmation required`
-            : "job creation failed"
+            ? `${payload.providerRisk.providerLabel} 需要确认`
+            : "任务创建失败"
         );
       }
 
@@ -350,7 +358,7 @@ export function CanvasStudio({
       });
 
       if (!completed.ok) {
-        throw new Error("job run failed");
+        throw new Error("任务运行失败");
       }
 
       const completedPayload = (await completed.json()) as {
@@ -360,10 +368,10 @@ export function CanvasStudio({
 
       await loadProjectCanvas(nextSelectedNodeId);
       setSaveState("saved");
-      setStatusText(`${draftJobRequest.type} completed`);
+      setStatusText(`${getJobTypeLabel(draftJobRequest.type)} 已完成`);
     } catch (error) {
       setSaveState("error");
-      setStatusText(error instanceof Error ? error.message : `${draftJobRequest.type} failed`);
+      setStatusText(error instanceof Error ? error.message : `${getJobTypeLabel(draftJobRequest.type)} 失败`);
     } finally {
       setRunningNodeId(null);
     }
@@ -374,7 +382,7 @@ export function CanvasStudio({
     const draftJobRequest = node ? getNodeJobRequest(node) : null;
 
     if (!node || !draftJobRequest) {
-      setStatusText("This node has no runnable job yet");
+      setStatusText("这个节点还没有可运行任务");
       return;
     }
 
@@ -524,18 +532,18 @@ export function CanvasStudio({
           <span className="brand-mark" aria-hidden="true" />
           <div>
             <strong>ZeroFlow</strong>
-            <span>Astro Video Studio</span>
+            <span>占星视频工作台</span>
           </div>
         </div>
 
         <nav className="nav-list" aria-label="Primary navigation">
           <Link aria-current="page" href={`/studio/project-ascendant-intro?projectId=${encodeURIComponent(projectId)}`}>
-            Studio
+            工作台
           </Link>
           <Link href={`/tldraw?projectId=${encodeURIComponent(projectId)}`}>tldraw</Link>
-          <Link href="/projects">Projects</Link>
-          <Link href="/library">Library</Link>
-          <Link href="/providers">Providers</Link>
+          <Link href="/projects">项目</Link>
+          <Link href="/library">资源库</Link>
+          <Link href="/providers">接口</Link>
         </nav>
 
         <section className="phase-card" aria-label="Current phase">
@@ -544,8 +552,8 @@ export function CanvasStudio({
           <p>{phaseSummary.goal}</p>
         </section>
 
-        <section className="node-palette" aria-label="Node palette">
-          <strong>Node palette</strong>
+        <section className="node-palette" aria-label="节点面板">
+          <strong>节点面板</strong>
           <div>
             {((Object.keys(nodeKindLabels) as CanvasNodeKind[]).filter((kind) => kind !== "preview" && kind !== "export")).map((kind) => (
               <button key={kind} type="button" onClick={() => addNode(kind)}>
@@ -555,27 +563,27 @@ export function CanvasStudio({
           </div>
         </section>
 
-        <section className="job-panel" aria-label="Status">
+        <section className="job-panel" aria-label="状态">
           <header>
-            <strong>Canvas</strong>
-            <span>{saveState}</span>
+            <strong>画布</strong>
+            <span>{saveStateLabels[saveState]}</span>
           </header>
           <p>{statusText}</p>
           <div className="job-panel-actions">
-            <button type="button" onClick={saveCanvas}>Save</button>
-            <button type="button" onClick={resetCanvas}>Reset</button>
+            <button type="button" onClick={saveCanvas}>保存</button>
+            <button type="button" onClick={resetCanvas}>重置</button>
           </div>
         </section>
       </aside>
 
-      <section className="canvas-region" aria-label="Canvas region">
+      <section className="canvas-region" aria-label="画布区域">
         <header className="topbar">
           <div>
-            <span className="eyeline">Canvas-first workflow</span>
-            <h1>Video studio</h1>
+            <span className="eyeline">画布优先流程</span>
+            <h1>视频工作台</h1>
           </div>
           <div className="topbar-actions">
-            <span className="save-state" data-state={saveState}>{saveState}</span>
+            <span className="save-state" data-state={saveState}>{saveStateLabels[saveState]}</span>
           </div>
         </header>
 
@@ -617,7 +625,7 @@ export function CanvasStudio({
                       d={getEdgePath(fromNode, toNode)}
                     />
                     <text className="edge-label" x={label.x} y={label.y}>
-                      {edge.relation}
+                      {getEdgeRelationLabel(edge.relation)}
                     </text>
                   </g>
                 );
@@ -659,8 +667,8 @@ export function CanvasStudio({
                     <p className="node-topic-line">{String(node.data.topic)}</p>
                   ) : null}
                   <footer>
-                    <small>{node.kind}</small>
-                    <span data-status={node.status}>{node.status}</span>
+                    <small>{nodeKindLabels[node.kind]}</small>
+                    <span data-status={node.status}>{getNodeStatusLabel(node.status)}</span>
                   </footer>
                   {isExpanded ? (
                     <InspectorPanel
@@ -765,10 +773,10 @@ function InspectorPanel({
     }
 
     return (
-      <aside className="inspector" aria-label="Inspector">
+      <aside className="inspector" aria-label="检查器">
         <header>
-          <span>Inspector</span>
-          <strong>No node selected</strong>
+          <span>检查器</span>
+          <strong>未选择节点</strong>
         </header>
         <VideoPreviewPanel previewSpec={previewSpec} />
       </aside>
@@ -783,9 +791,9 @@ function InspectorPanel({
   const content = (
     <>
       <header>
-        <span>{isInline ? "Inline editor" : "Inspector"}</span>
+        <span>{isInline ? "卡片编辑" : "检查器"}</span>
         <strong>{nodeKindLabels[node.kind]}</strong>
-        <p>{isInline ? "Editing this card" : node.id}</p>
+        <p>{isInline ? "正在编辑这张卡片" : node.id}</p>
       </header>
 
       {nodeJobRequest ? (
@@ -796,14 +804,14 @@ function InspectorPanel({
             type="button"
             onClick={() => onRunNode(node.id)}
           >
-            {running ? "Running..." : getNodeRunLabel(node)}
+            {running ? "运行中..." : getNodeRunLabel(node)}
           </button>
           <div
             className="job-provider-notice"
             data-risk={liveProviderGuard ? "live-provider" : "local-or-mock"}
           >
             {liveProviderGuard
-              ? `${liveProviderGuard.providerLabel} requires confirmation before this job runs.`
+              ? `${liveProviderGuard.providerLabel} 运行前需要确认。`
               : statusText}
           </div>
         </section>
@@ -811,7 +819,7 @@ function InspectorPanel({
 
       {node.kind === "scene" ? (
         <section className="job-actions">
-          <strong>Generate resources</strong>
+          <strong>生成资源</strong>
           <div className="scene-resource-grid">
             {sceneResourceJobIds.map((resourceId) => {
               const request = getSceneResourceJobRequest(node, resourceId);
@@ -823,7 +831,7 @@ function InspectorPanel({
                   type="button"
                   onClick={() => onRunNodeJob(node.id, request)}
                 >
-                  {running ? "Running..." : sceneResourceLabels[resourceId]}
+                  {running ? "运行中..." : sceneResourceLabels[resourceId]}
                 </button>
               );
             })}
@@ -833,37 +841,37 @@ function InspectorPanel({
 
       {node.kind === "preview" ? (
         <section className="job-actions">
-          <strong>Next</strong>
+          <strong>下一步</strong>
           <button
             disabled={running}
             type="button"
             onClick={() => onRunNodeJob(node.id, getCreateExportJobRequest(node))}
           >
-            {running ? "Running..." : "Create export"}
+            {running ? "运行中..." : "创建导出"}
           </button>
         </section>
       ) : null}
 
       <label>
-        Title
+        标题
         <input
-          value={getString(node.data.title, nodeKindLabels[node.kind])}
+          value={getNodeTitle(node)}
           onChange={(event) => onDataChange("title", event.currentTarget.value)}
         />
       </label>
 
       <label>
-        Description
+        描述
         <textarea
           rows={3}
-          value={getString(node.data.description, nodeKindDescriptions[node.kind])}
+          value={getNodeDescription(node)}
           onChange={(event) => onDataChange("description", event.currentTarget.value)}
         />
       </label>
 
       {node.kind === "topic" ? (
         <label>
-          Topic
+          主题
           <textarea
             rows={3}
             value={getString(node.data.topic, getString(node.data.description, ""))}
@@ -874,7 +882,7 @@ function InspectorPanel({
 
       {node.kind === "script" ? (
         <label>
-          Script text
+          文案正文
           <textarea
             rows={7}
             value={getString(node.data.scriptText, "")}
@@ -885,7 +893,7 @@ function InspectorPanel({
 
       {node.kind === "script" || node.kind === "storyboard" ? (
         <label>
-          Scene count
+          分镜数量
           <input
             max={12}
             min={1}
@@ -901,7 +909,7 @@ function InspectorPanel({
       {node.kind === "scene" ? (
         <>
           <label>
-            Duration
+            时长
             <input
               max={30}
               min={1}
@@ -913,7 +921,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Narration
+            旁白
             <textarea
               rows={4}
               value={getString(node.data.narration, "")}
@@ -921,7 +929,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Visual prompt
+            画面提示词
             <textarea
               rows={4}
               value={getString(node.data.visualPrompt, "")}
@@ -935,44 +943,44 @@ function InspectorPanel({
         <>
           <div className="inspector-grid">
             <label>
-              Primary visual
+              主视觉
               <select
                 value={getString(node.data.primaryVisualKind, "auto")}
                 onChange={(event) => onDataChange("primaryVisualKind", event.currentTarget.value)}
               >
-                <option value="auto">Auto</option>
-                <option value="text">Text</option>
-                <option value="chart">Chart</option>
-                <option value="image">Image</option>
-                <option value="d3">D3</option>
-                <option value="three">Three</option>
+                <option value="auto">自动</option>
+                <option value="text">文字</option>
+                <option value="chart">星盘</option>
+                <option value="image">简笔画</option>
+                <option value="d3">D3 图表</option>
+                <option value="three">三维场景</option>
               </select>
             </label>
             <label>
-              Layout
+              布局
               <select
                 value={getString(node.data.layoutPreset, "single")}
                 onChange={(event) => onDataChange("layoutPreset", event.currentTarget.value)}
               >
-                <option value="single">Single</option>
-                <option value="split">Split</option>
-                <option value="overlay">Overlay</option>
+                <option value="single">单画面</option>
+                <option value="split">左右分屏</option>
+                <option value="overlay">叠加层</option>
               </select>
             </label>
             <label>
-              Transition
+              转场
               <select
                 value={getString(node.data.transition, "fade")}
                 onChange={(event) => onDataChange("transition", event.currentTarget.value)}
               >
-                <option value="cut">Cut</option>
-                <option value="fade">Fade</option>
-                <option value="wipe">Wipe</option>
-                <option value="zoom">Zoom</option>
+                <option value="cut">直接切</option>
+                <option value="fade">淡入淡出</option>
+                <option value="wipe">擦除</option>
+                <option value="zoom">缩放</option>
               </select>
             </label>
             <label>
-              Duration
+              时长
               <input
                 max={30}
                 min={1}
@@ -991,7 +999,7 @@ function InspectorPanel({
                 type="checkbox"
                 onChange={(event) => onDataChange("includeCaption", event.currentTarget.checked)}
               />
-              Caption
+              字幕
             </label>
             <label className="inspector-checkbox-row">
               <input
@@ -999,7 +1007,7 @@ function InspectorPanel({
                 type="checkbox"
                 onChange={(event) => onDataChange("includeVoice", event.currentTarget.checked)}
               />
-              Voice
+              配音
             </label>
           </div>
         </>
@@ -1008,7 +1016,7 @@ function InspectorPanel({
       {node.kind === "caption" ? (
         <>
           <label>
-            Caption Y
+            字幕高度
             <input
               max={100}
               min={0}
@@ -1022,7 +1030,7 @@ function InspectorPanel({
           </label>
           <div className="inspector-grid">
             <label>
-              Font size
+              字号
               <input
                 max={96}
                 min={20}
@@ -1034,7 +1042,7 @@ function InspectorPanel({
               />
             </label>
             <label>
-              Color
+              颜色
               <input
                 value={getString(node.data.color, "#ffffff")}
                 onChange={(event) => onDataChange("color", event.currentTarget.value)}
@@ -1047,7 +1055,7 @@ function InspectorPanel({
       {node.kind === "voice" ? (
         <>
           <label>
-            Speed
+            语速
             <input
               max={1.8}
               min={0.5}
@@ -1061,7 +1069,7 @@ function InspectorPanel({
             <output>{getNumber(node.data.speed, 1).toFixed(2)}x</output>
           </label>
           <label>
-            Volume
+            音量
             <input
               max={2}
               min={0}
@@ -1075,7 +1083,7 @@ function InspectorPanel({
             <output>{Math.round(getNumber(node.data.volume, 1) * 100)}%</output>
           </label>
           <label>
-            Voice profile
+            音色
             <input
               value={getString(node.data.voiceProfile, getString(node.data.referenceAudioName, ""))}
               onChange={(event) => onDataChange("voiceProfile", event.currentTarget.value)}
@@ -1086,7 +1094,7 @@ function InspectorPanel({
 
       {node.kind === "image" ? (
         <label>
-          Image prompt
+          图片提示词
           <textarea
             rows={5}
             value={getString(node.data.prompt, getString(node.data.visualPrompt, ""))}
@@ -1098,7 +1106,7 @@ function InspectorPanel({
       {node.kind === "chart" ? (
         <div className="inspector-grid">
           <label>
-            Birth date
+            出生日期
             <input
               type="date"
               value={getString(node.data.birthDate, defaultChartBirthData.birthDate)}
@@ -1106,7 +1114,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Birth time
+            出生时间
             <input
               type="time"
               value={getString(node.data.birthTime, defaultChartBirthData.birthTime)}
@@ -1114,14 +1122,14 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Place
+            地点
             <input
               value={getString(node.data.placeName, defaultChartBirthData.placeName)}
               onChange={(event) => onDataChange("placeName", event.currentTarget.value)}
             />
           </label>
           <label>
-            Highlight
+            高亮目标
             <input
               value={getString(node.data.highlight, defaultChartBirthData.highlight)}
               onChange={(event) => onDataChange("highlight", event.currentTarget.value)}
@@ -1132,7 +1140,7 @@ function InspectorPanel({
 
       {node.kind === "preview" ? (
         <label>
-          Still frame
+          预览帧
           <input
             min={0}
             type="number"
@@ -1147,17 +1155,17 @@ function InspectorPanel({
       {node.kind === "export" ? (
         <div className="inspector-grid">
           <label>
-            Export scope
+            导出范围
             <select
               value={getExportScope(node)}
               onChange={(event) => onDataChange("exportScope", event.currentTarget.value)}
             >
-              <option value="clip">Clip</option>
-              <option value="full">Full video</option>
+              <option value="clip">片段</option>
+              <option value="full">整条视频</option>
             </select>
           </label>
           <label>
-            Frame range
+            帧范围
             <input
               value={getExportFrameRange(node)}
               onChange={(event) => onDataChange("frameRange", event.currentTarget.value)}
@@ -1169,7 +1177,7 @@ function InspectorPanel({
       {!isInline ? (
         <div className="inspector-grid">
           <label>
-            X
+            横向位置
             <input
               type="number"
               value={node.position.x}
@@ -1179,7 +1187,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Y
+            纵向位置
             <input
               type="number"
               value={node.position.y}
@@ -1189,7 +1197,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Width
+            宽度
             <input
               min={120}
               type="number"
@@ -1200,7 +1208,7 @@ function InspectorPanel({
             />
           </label>
           <label>
-            Height
+            高度
             <input
               min={88}
               type="number"
@@ -1215,7 +1223,7 @@ function InspectorPanel({
 
       {assetUrl ? (
         <section className="chart-result">
-          <strong>Asset</strong>
+          <strong>素材</strong>
           <span>{assetUrl}</span>
         </section>
       ) : null}
@@ -1223,7 +1231,7 @@ function InspectorPanel({
       {!isInline ? (
         <>
           <label>
-            Raw data
+            原始数据
             <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
           </label>
           <button
@@ -1241,7 +1249,7 @@ function InspectorPanel({
               }
             }}
           >
-            Apply JSON
+            应用 JSON
           </button>
 
           <VideoPreviewPanel previewSpec={previewSpec} />
@@ -1254,7 +1262,7 @@ function InspectorPanel({
     return (
       <section
         className="inspector node-inline-editor"
-        aria-label="Inline node editor"
+        aria-label="卡片内编辑器"
         onDoubleClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => event.stopPropagation()}
       >
@@ -1264,7 +1272,7 @@ function InspectorPanel({
   }
 
   return (
-    <aside className="inspector" aria-label="Inspector">
+    <aside className="inspector" aria-label="检查器">
       {content}
     </aside>
   );
@@ -1277,7 +1285,7 @@ function VideoPreviewPanel({ previewSpec }: { previewSpec: AstroVideoSpec }) {
   return (
     <section className="video-preview-panel">
       <header>
-        <strong>Preview</strong>
+        <strong>预览</strong>
         <span>{previewSpec.title}</span>
       </header>
       <div className="video-preview-frame" style={{ aspectRatio: `${size.width} / ${size.height}` }}>
@@ -1294,7 +1302,7 @@ function VideoPreviewPanel({ previewSpec }: { previewSpec: AstroVideoSpec }) {
             style={{ height: "100%", width: "100%" }}
           />
         ) : (
-          <div className="preview-loading">No scenes to preview</div>
+          <div className="preview-loading">暂无可预览分镜</div>
         )}
       </div>
     </section>
@@ -1363,11 +1371,13 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function getNodeTitle(node: CanvasNode) {
-  return getString(node.data.title, nodeKindLabels[node.kind]);
+  return translateLegacyNodeTitle(getString(node.data.title, nodeKindLabels[node.kind]));
 }
 
 function getNodeDescription(node: CanvasNode) {
-  return getString(node.data.description, nodeKindDescriptions[node.kind]);
+  return translateLegacyNodeDescription(
+    getString(node.data.description, nodeKindDescriptions[node.kind])
+  );
 }
 
 function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
@@ -1449,30 +1459,123 @@ function getChartJobInput(node: CanvasNode) {
 function getNodeRunLabel(node: CanvasNode) {
   switch (node.kind) {
     case "topic":
-      return "Generate script";
+      return "生成文案";
     case "script":
     case "storyboard":
-      return "Generate storyboard";
+      return "生成分镜";
     case "caption":
-      return "Align captions";
+      return "对齐字幕";
     case "voice":
-      return "Generate TTS";
+      return "生成配音";
     case "chart":
-      return "Generate chart";
+      return "生成星盘";
     case "image":
-      return "Generate image";
+      return "生成简笔画";
     case "d3":
     case "three":
-      return "Export visual";
+      return "导出视觉素材";
     case "composition":
-      return "Create preview";
+      return "创建预览";
     case "preview":
-      return "Render still";
+      return "渲染静帧";
     case "export":
-      return getExportScope(node) === "full" ? "Render full video" : "Render clip";
+      return getExportScope(node) === "full" ? "渲染整条视频" : "渲染片段";
     default:
-      return "Run job";
+      return "运行任务";
   }
+}
+
+function getJobTypeLabel(jobType: string) {
+  const labels: Record<string, string> = {
+    "generate-script": "生成文案",
+    "generate-storyboard": "生成分镜",
+    "generate-image": "生成简笔画",
+    "generate-tts": "生成配音",
+    "generate-chart": "生成星盘",
+    "export-visual-asset": "导出视觉素材",
+    "align-captions": "对齐字幕",
+    "render-preview": "渲染预览",
+    "render-video": "渲染视频",
+    "create-preview-node": "创建预览",
+    "create-export-node": "创建导出"
+  };
+
+  return labels[jobType] ?? jobType;
+}
+
+function getNodeStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    idle: "待处理",
+    ready: "就绪",
+    running: "运行中",
+    failed: "失败"
+  };
+
+  return labels[status] ?? status;
+}
+
+function getEdgeRelationLabel(relation: string) {
+  const labels: Record<string, string> = {
+    produces: "生成",
+    uses: "使用",
+    renders: "渲染"
+  };
+
+  return labels[relation] ?? relation;
+}
+
+function translateLegacyNodeTitle(title: string) {
+  const labels: Record<string, string> = {
+    Topic: "主题",
+    Script: "文案",
+    Storyboard: "分镜计划",
+    Scene: "分镜",
+    Opening: "开场问题",
+    Caption: "字幕",
+    Voice: "配音",
+    Chart: "星盘",
+    Image: "简笔画",
+    "D3 Diagram": "D3 图表",
+    "Three Scene": "三维场景",
+    "Three 场景": "三维场景",
+    Music: "音乐",
+    Composition: "画面合成",
+    Preview: "预览",
+    Export: "导出"
+  };
+
+  return labels[title] ?? title;
+}
+
+function translateLegacyNodeDescription(description: string) {
+  const labels: Record<string, string> = {
+    "45-second intro for ascendant sign basics": "用 45 秒给占星小白解释上升星座",
+    "Choose the topic for the video": "选择这条视频要讲的占星主题",
+    "Generate and edit narration and beats": "生成并编辑口播文案和节奏",
+    "Generate and refine narration and beats": "生成并优化口播文案和节奏",
+    "Split the script into editable scenes": "把文案拆成可编辑的分镜",
+    "Break the script into editable visual beats": "把文案拆成可编辑的视觉段落",
+    "A single visual scene": "单个视频画面",
+    "Caption timing and styling": "字幕时间轴和样式",
+    "Voice settings": "配音参数",
+    "Warm teaching voice": "温和的教学配音",
+    "Astrolabe and highlight targets": "星盘与高亮目标",
+    "Ascendant highlight point": "高亮上升点",
+    "Image prompt and assets": "图片提示词和素材",
+    "A person walking through a doorway into a starry room": "一个人推开门走进星空房间",
+    "Structured diagram data for animated teaching visuals": "用于动画教学图解的结构化数据",
+    "Ascendant concept as a timeline diagram": "用时间线图解上升星座概念",
+    "Spatial scene contract for Three.js visuals": "三维空间场景配置",
+    "Spatial orbit scene for rising sign": "用于上升星座的空间轨道场景",
+    "BGM and sound design": "BGM 和声音设计",
+    "Composition result": "合成当前分镜画面",
+    "Combine scenes, captions, voice, and assets": "整合分镜、字幕、配音和素材",
+    "Full video preview": "整条视频预览",
+    "MP4 export settings": "MP4 导出设置",
+    "1080x1920 MP4": "1080x1920 MP4 导出"
+  };
+
+  return labels[description] ?? description;
 }
 
 function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) {

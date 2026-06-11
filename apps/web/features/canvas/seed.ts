@@ -3,37 +3,37 @@
 export const defaultProjectId = "project-ascendant-intro";
 
 export const nodeKindLabels: Record<CanvasNodeKind, string> = {
-  topic: "Topic",
-  script: "Script",
-  storyboard: "Storyboard",
-  scene: "Scene",
-  caption: "Caption",
-  voice: "Voice",
-  chart: "Chart",
-  image: "Image",
-  d3: "D3 Diagram",
-  three: "Three Scene",
-  music: "Music",
-  composition: "Composition",
-  preview: "Preview",
-  export: "Export"
+  topic: "主题",
+  script: "文案",
+  storyboard: "分镜计划",
+  scene: "分镜",
+  caption: "字幕",
+  voice: "配音",
+  chart: "星盘",
+  image: "简笔画",
+  d3: "D3 图表",
+  three: "三维场景",
+  music: "音乐",
+  composition: "画面合成",
+  preview: "预览",
+  export: "导出"
 };
 
 export const nodeKindDescriptions: Record<CanvasNodeKind, string> = {
-  topic: "Choose the topic for the video",
-  script: "Generate and edit narration and beats",
-  storyboard: "Split the script into editable scenes",
-  scene: "A single visual scene",
-  caption: "Caption timing and styling",
-  voice: "Voice settings",
-  chart: "Astrolabe and highlight targets",
-  image: "Image prompt and assets",
-  d3: "Structured diagram data for animated teaching visuals",
-  three: "Spatial scene contract for Three.js visuals",
-  music: "BGM and sound design",
-  composition: "Composition result",
-  preview: "Full video preview",
-  export: "MP4 export settings"
+  topic: "选择这条视频要讲的占星主题",
+  script: "生成并编辑口播文案和节奏",
+  storyboard: "把文案拆成可编辑的分镜",
+  scene: "单个视频画面",
+  caption: "字幕时间轴和样式",
+  voice: "配音参数",
+  chart: "星盘与高亮目标",
+  image: "简笔画提示词和素材",
+  d3: "用于动画教学图解的结构化数据",
+  three: "三维空间场景配置",
+  music: "BGM 和声音设计",
+  composition: "合成当前分镜画面",
+  preview: "整条视频预览",
+  export: "MP4 导出设置"
 };
 
 export const defaultCanvasDocument: CanvasDocument = {
@@ -48,11 +48,11 @@ export const defaultCanvasDocument: CanvasDocument = {
       size: { width: 280, height: 150 },
       status: "ready",
       data: {
-        title: "Topic",
-        description: "45-second intro for ascendant sign basics",
-        topic: "What exactly is the ascendant sign?",
+        title: "主题",
+        description: "用 45 秒给占星小白解释上升星座",
+        topic: "上升星座到底是什么？",
         targetDurationSec: 45,
-        tone: "warm and beginner-friendly"
+        tone: "温和、适合新手"
       }
     }
   ],
@@ -71,9 +71,9 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 240, height: 140 },
       status: "ready",
       data: {
-        title: "Topic",
-        description: "45-second intro for ascendant sign basics",
-        topic: "What exactly is the ascendant sign?"
+        title: "主题",
+        description: "用 45 秒给占星小白解释上升星座",
+        topic: "上升星座到底是什么？"
       }
     },
     {
@@ -84,12 +84,12 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 300, height: 180 },
       status: "ready",
       data: {
-        title: "Script",
-        description: "Generate and refine narration and beats",
+        title: "文案",
+        description: "生成并优化口播文案和节奏",
         scriptText:
-          "Have you noticed that some people make a strong first impression the moment they appear? The ascendant sign is the sign rising on the eastern horizon at the moment you were born.",
+          "你有没有发现，有些人一出现就会给人很强的第一印象？上升星座，就是你出生那一刻从东方地平线升起的星座。",
         targetDurationSec: 45,
-        tone: "warm and beginner-friendly"
+        tone: "温和、适合新手"
       }
     },
     {
@@ -99,8 +99,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 270, height: 160 },
       status: "ready",
       data: {
-        title: "Storyboard",
-        description: "Break the script into editable visual beats",
+        title: "分镜计划",
+        description: "把文案拆成可编辑的视觉段落",
         sceneCount: 5
       }
     },
@@ -112,8 +112,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 250, height: 170 },
       status: "ready",
       data: {
-        title: "Opening",
-        description: "Where does the first impression come from?",
+        title: "开场问题",
+        description: "第一印象从哪里来？",
         durationSec: 6,
         sceneType: "text"
       }
@@ -126,8 +126,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 250, height: 150 },
       status: "ready",
       data: {
-        title: "Caption",
-        description: "Where does the first impression come from?",
+        title: "字幕",
+        description: "第一印象从哪里来？",
         yPercent: 78,
         fontSize: 48,
         color: "#ffffff"
@@ -141,8 +141,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 250, height: 150 },
       status: "ready",
       data: {
-        title: "Voice",
-        description: "Warm teaching voice",
+        title: "配音",
+        description: "温和的教学配音",
         speed: 1,
         volume: 1,
         emotion: "warm"
@@ -156,8 +156,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 250, height: 160 },
       status: "ready",
       data: {
-        title: "Chart",
-        description: "Ascendant highlight point",
+        title: "星盘",
+        description: "高亮上升点",
         chartType: "natal",
         highlight: "ascendant",
         birthDate: "1990-01-01",
@@ -177,8 +177,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 270, height: 160 },
       status: "ready",
       data: {
-        title: "Image",
-        description: "A person walking through a doorway into a starry room",
+        title: "简笔画",
+        description: "一个人推开门走进星空房间",
         prompt: "simple line drawing, a person opening a door into a starry room"
       }
     },
@@ -190,8 +190,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 280, height: 170 },
       status: "ready",
       data: {
-        title: "D3 Diagram",
-        description: "Ascendant concept as a timeline diagram",
+        title: "D3 图表",
+        description: "用时间线图解上升星座概念",
         durationSec: 8,
         diagram: "timeline",
         dataJson:
@@ -206,8 +206,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 280, height: 170 },
       status: "ready",
       data: {
-        title: "Three Scene",
-        description: "Spatial orbit scene for rising sign",
+        title: "三维场景",
+        description: "用于上升星座的空间轨道场景",
         durationSec: 8,
         threeScene: "orbit",
         camera: "portrait-orbit",
@@ -224,8 +224,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 270, height: 160 },
       status: "idle",
       data: {
-        title: "Composition",
-        description: "Combine scenes, captions, voice, and assets",
+        title: "画面合成",
+        description: "整合分镜、字幕、配音和素材",
         renderer: "remotion-scene"
       }
     },
@@ -236,8 +236,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 260, height: 150 },
       status: "idle",
       data: {
-        title: "Preview",
-        description: "Full video preview",
+        title: "预览",
+        description: "整条视频预览",
         renderer: "remotion"
       }
     },
@@ -248,8 +248,8 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 240, height: 150 },
       status: "idle",
       data: {
-        title: "Export",
-        description: "1080x1920 MP4",
+        title: "导出",
+        description: "1080x1920 MP4 导出",
         format: "mp4"
       }
     }

@@ -3,7 +3,7 @@ import type { GeneratedScript, GeneratedStoryboard, ImageProvider, LlmProvider, 
 export function createMockLlmProvider(): LlmProvider {
   return {
     async generateScript(input) {
-      const targetDurationSec = input.targetDurationSec ?? 45;
+      const targetDurationSec = input.targetDurationSec ?? 60;
       const topic = normalizeScriptTopic(input.topic || "占星基础知识");
       const mockScripts: Record<string, { hook: string; scriptText: string }> = {
         "上升星座": {
@@ -54,7 +54,7 @@ export function createMockLlmProvider(): LlmProvider {
     },
     async generateStoryboard(input) {
       const count = Math.max(1, Math.min(12, input.sceneCount));
-      const duration = Math.max(4, Math.round((input.targetDurationSec ?? 45) / count));
+      const duration = Math.max(4, Math.round((input.targetDurationSec ?? 60) / count));
       const paragraphs = input.scriptText.split("\n").filter(line => line.trim().length > 0 && !line.startsWith("比如你的太阳"));
       const paragraphCount = paragraphs.length;
       const firstLine = paragraphs[0] ?? input.scriptText.slice(0, 40);

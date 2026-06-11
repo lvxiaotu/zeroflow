@@ -1,7 +1,7 @@
 {
   "id": "project-ascendant-intro",
   "title": "上升星座到底是什么？",
-  "topic": "用 45 秒给占星小白解释上升星座",
+  "topic": "用 60 秒给占星小白解释上升星座",
   "status": "draft",
   "spec": {
     "version": "1",
@@ -111,7 +111,7 @@
         "size": { "width": 240, "height": 140 },
         "status": "ready",
         "data": {
-          "topic": "用 45 秒给占星小白解释上升星座"
+          "topic": "用 60 秒给占星小白解释上升星座"
         }
       },
       {
@@ -122,7 +122,7 @@
         "size": { "width": 300, "height": 180 },
         "status": "ready",
         "data": {
-          "targetDurationSec": 45,
+          "targetDurationSec": 60,
           "tone": "warm beginner-friendly"
         }
       },

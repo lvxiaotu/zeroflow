@@ -60,9 +60,15 @@ import {
 } from "../canvas/aiModels";
 import {
   getAiPromptDataKey,
+  getAiPromptLabel,
+  getAiPromptPlaceholder,
   getAiPromptRows,
   getAiPromptValue
 } from "../canvas/aiNodeInputs";
+import {
+  getTargetDurationSec,
+  targetDurationOptions
+} from "../canvas/videoDurationOptions";
 import {
   getCreateExportJobRequest,
   getCreatePreviewJobRequest
@@ -789,6 +795,17 @@ function TldrawNodeInspector({
           >
             {running ? "Running..." : getNodeRunLabel(node)}
           </button>
+          {node.kind === "topic" ? (
+            <button
+              className="tldraw-inspector-run"
+              data-risk="local-or-mock"
+              disabled={running}
+              type="button"
+              onClick={() => void onRunNodeJob(node.id, getCreateManualScriptJobRequest(node))}
+            >
+              {running ? "Running..." : "手写文案"}
+            </button>
+          ) : null}
           <section
             className="tldraw-provider-guard"
             data-risk="local-or-mock"
@@ -863,9 +880,10 @@ function TldrawNodeInspector({
 
       {aiPromptDataKey ? (
         <label>
-          提示词
+          {getAiPromptLabel(node.kind)}
           <textarea
             name={aiPromptDataKey}
+            placeholder={getAiPromptPlaceholder(node.kind)}
             rows={getAiPromptRows(node.kind)}
             value={getAiPromptValue(node)}
             onChange={(event) => onDataChange(node.id, aiPromptDataKey, event.currentTarget.value)}
@@ -901,6 +919,23 @@ function TldrawNodeInspector({
             {scriptPromptProfiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
+      {node.kind === "topic" || node.kind === "script" || node.kind === "storyboard" ? (
+        <label>
+          目标时长
+          <select
+            name="targetDurationSec"
+            value={getTargetDurationSec(node.data.targetDurationSec)}
+            onChange={(event) => onDataChange(node.id, "targetDurationSec", Number(event.currentTarget.value))}
+          >
+            {targetDurationOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -1563,6 +1598,17 @@ const tldrawSceneResourceLabels: Record<SceneResourceJobId, string> = {
   composition: "Composition"
 };
 
+function getCreateManualScriptJobRequest(node: CanvasNode): NodeJobRequest {
+  return {
+    type: "create-manual-script",
+    input: {
+      topic: getAiPromptValue(node) || "Astrology teaching short",
+      targetDurationSec: getTargetDurationSec(node.data.targetDurationSec),
+      scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId)
+    }
+  };
+}
+
 function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   if (node.kind === "topic") {
     return {
@@ -1570,7 +1616,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         topic: getAiPromptValue(node) || "Astrology teaching short",
         model: getNodeAiModel(node),
-        scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId)
+        scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId),
+        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
       }
     };
   }
@@ -1581,7 +1628,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
-        model: getNodeAiModel(node)
+        model: getNodeAiModel(node),
+        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
       }
     };
   }

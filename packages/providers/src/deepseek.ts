@@ -31,6 +31,7 @@ export function createDeepSeekProvider(): LlmProvider {
   return {
     async generateScript(input) {
       const fallback = () => mock.generateScript(input);
+      const targetDurationSec = input.targetDurationSec ?? 60;
       const backend = resolveChatBackend({
         deepseekApiKey: apiKey,
         deepseekBaseUrl: baseUrl,
@@ -46,7 +47,8 @@ export function createDeepSeekProvider(): LlmProvider {
         `主题：${input.topic}`,
         `文案风格：${profile.label}`,
         `风格说明：${profile.description}`,
-        `目标时长：${input.targetDurationSec ?? 45} 秒`,
+        `目标时长：${targetDurationSec} 秒`,
+        `字数目标：${getScriptLengthGuidance(targetDurationSec)}`,
         `语气：${input.tone ?? "温和、清楚、适合占星小白"}`,
         `受众：${input.audience ?? "占星小白"}`,
         "风格规则：",
@@ -57,7 +59,8 @@ export function createDeepSeekProvider(): LlmProvider {
         ...profile.avoidRules.map((rule) => `- ${rule}`),
         "输出要求：",
         "- scriptText 必须是一段完整的、可直接朗读的口播文案。",
-        "- 45 秒约 180-260 个汉字，60 秒约 260-360 个汉字，不要写成长文章。",
+        "- 按字数目标写足信息密度，不要写成摘要、提纲或标题扩写。",
+        "- 除非用户明确要求极短，否则不要低于字数目标下限。",
         "- 每 1-2 句自然分段，方便后续切分镜。",
         "- title 要从用户输入中提炼，不要照抄一整段需求。",
         "- hook 必须 50 字以内，不能和 title 完全相同。",
@@ -65,6 +68,7 @@ export function createDeepSeekProvider(): LlmProvider {
       ].join("\n");
       const result = await completeJson<GeneratedScript>({
         ...backend,
+        maxTokens: getScriptMaxTokens(targetDurationSec),
         messages: [
           {
             role: "system",
@@ -90,7 +94,7 @@ export function createDeepSeekProvider(): LlmProvider {
       const prompt = [
         "请根据占星教学短视频的文案，生成详细的分镜方案。输出严格 JSON，不要 Markdown。",
         `分镜数量：${input.sceneCount}`,
-        `目标总时长：${input.targetDurationSec ?? 45} 秒`,
+        `目标总时长：${input.targetDurationSec ?? 60} 秒`,
         `文案：${input.scriptText}`,
         "要求：",
         "- 每个分镜的 narration 为该段口播内容（从文案中按段落分配）",
@@ -152,11 +156,42 @@ function resolveChatBackend({
   };
 }
 
+function getScriptLengthGuidance(targetDurationSec: number) {
+  const duration = Math.max(30, Math.min(Math.round(targetDurationSec), 1800));
+
+  if (duration <= 30) {
+    return "约 220-350 个汉字，适合 30 秒快节奏口播";
+  }
+
+  if (duration <= 60) {
+    return "约 450-650 个汉字，适合 1 分钟完整教学口播";
+  }
+
+  if (duration <= 300) {
+    return "约 2200-3200 个汉字，适合 5 分钟分段教学长稿";
+  }
+
+  if (duration <= 900) {
+    return "约 6500-9000 个汉字，适合 15 分钟课程型讲稿；必须分成清晰小节";
+  }
+
+  return "约 12000-18000 个汉字，适合 30 分钟课程型长讲稿；必须分成清晰章节和小节";
+}
+
+function getScriptMaxTokens(targetDurationSec: number) {
+  if (targetDurationSec <= 30) return 1400;
+  if (targetDurationSec <= 60) return 2200;
+  if (targetDurationSec <= 300) return 7000;
+  if (targetDurationSec <= 900) return 16000;
+  return 30000;
+}
+
 async function completeJson<T>({
   apiKey,
   baseUrl,
   model,
   provider,
+  maxTokens,
   messages,
   fallback
 }: {
@@ -164,6 +199,7 @@ async function completeJson<T>({
   baseUrl: string;
   model: string;
   provider: string;
+  maxTokens?: number;
   messages: ChatMessage[];
   fallback: () => Promise<ProviderResult<T>>;
 }): Promise<ProviderResult<T>> {
@@ -177,6 +213,7 @@ async function completeJson<T>({
       baseUrl,
       model,
       messages,
+      maxTokens,
       responseFormat: true
     });
     const retryPayload = payload
@@ -186,6 +223,7 @@ async function completeJson<T>({
           baseUrl,
           model,
           messages,
+          maxTokens,
           responseFormat: false
         });
     const finalPayload = payload ?? retryPayload;
@@ -212,12 +250,14 @@ async function requestCompletion({
   baseUrl,
   model,
   messages,
+  maxTokens,
   responseFormat
 }: {
   apiKey: string;
   baseUrl: string;
   model: string;
   messages: ChatMessage[];
+  maxTokens?: number;
   responseFormat: boolean;
 }) {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
@@ -230,6 +270,7 @@ async function requestCompletion({
         model,
         messages,
         temperature: 0.7,
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
         ...(responseFormat ? { response_format: { type: "json_object" } } : {})
       })
     });

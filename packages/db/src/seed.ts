@@ -20,9 +20,9 @@ export const defaultCanvasDocument: CanvasDocument = {
       status: "ready",
       data: {
         title: "主题",
-        description: "用 45 秒给占星小白解释上升星座",
+        description: "用 60 秒给占星小白解释上升星座",
         topic: "上升星座到底是什么？",
-        targetDurationSec: 45,
+        targetDurationSec: 60,
         tone: "温和、适合小白"
       }
     }
@@ -43,7 +43,7 @@ export const demoCanvasDocument: CanvasDocument = {
       status: "ready",
       data: {
         title: "主题",
-        description: "用 45 秒给占星小白解释上升星座",
+        description: "用 60 秒给占星小白解释上升星座",
         topic: "上升星座到底是什么？"
       }
     },
@@ -59,7 +59,7 @@ export const demoCanvasDocument: CanvasDocument = {
         description: "生成并编辑旁白、知识点和视频节奏",
         scriptText:
           "你有没有发现，有些人一出现，就会给人很鲜明的第一印象？上升星座，就是你出生那一刻东方地平线上正在升起的星座。",
-        targetDurationSec: 45,
+        targetDurationSec: 60,
         tone: "温和、适合小白"
       }
     },

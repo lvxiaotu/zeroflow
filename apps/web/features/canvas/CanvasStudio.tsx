@@ -39,9 +39,15 @@ import {
 } from "./aiModels";
 import {
   getAiPromptDataKey,
+  getAiPromptLabel,
+  getAiPromptPlaceholder,
   getAiPromptRows,
   getAiPromptValue
 } from "./aiNodeInputs";
+import {
+  getTargetDurationSec,
+  targetDurationOptions
+} from "./videoDurationOptions";
 
 type SaveState = "saved" | "saving" | "unsaved" | "restored" | "error";
 type CanvasDragState =
@@ -816,6 +822,16 @@ function InspectorPanel({
           >
             {running ? "运行中..." : getNodeRunLabel(node)}
           </button>
+          {node.kind === "topic" ? (
+            <button
+              data-risk="local-or-mock"
+              disabled={running}
+              type="button"
+              onClick={() => onRunNodeJob(node.id, getCreateManualScriptJobRequest(node))}
+            >
+              {running ? "运行中..." : "手写文案"}
+            </button>
+          ) : null}
           <div
             className="job-provider-notice"
             data-risk="local-or-mock"
@@ -883,8 +899,10 @@ function InspectorPanel({
 
       {aiPromptDataKey ? (
         <label>
-          提示词
+          {getAiPromptLabel(node.kind)}
           <textarea
+            name={aiPromptDataKey}
+            placeholder={getAiPromptPlaceholder(node.kind)}
             rows={getAiPromptRows(node.kind)}
             value={getAiPromptValue(node)}
             onChange={(event) => onDataChange(aiPromptDataKey, event.currentTarget.value)}
@@ -919,6 +937,23 @@ function InspectorPanel({
             {scriptPromptProfiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
+      {node.kind === "topic" || node.kind === "script" || node.kind === "storyboard" ? (
+        <label>
+          目标时长
+          <select
+            name="targetDurationSec"
+            value={getTargetDurationSec(node.data.targetDurationSec)}
+            onChange={(event) => onDataChange("targetDurationSec", Number(event.currentTarget.value))}
+          >
+            {targetDurationOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -1426,6 +1461,17 @@ function getNodeDescription(node: CanvasNode) {
   );
 }
 
+function getCreateManualScriptJobRequest(node: CanvasNode): NodeJobRequest {
+  return {
+    type: "create-manual-script",
+    input: {
+      topic: getAiPromptValue(node) || "Astrology teaching short",
+      targetDurationSec: getTargetDurationSec(node.data.targetDurationSec),
+      scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId)
+    }
+  };
+}
+
 function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   if (node.kind === "topic") {
     return {
@@ -1433,7 +1479,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         topic: getAiPromptValue(node) || "Astrology teaching short",
         model: getNodeAiModel(node),
-        scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId)
+        scriptProfileId: getString(node.data.scriptProfileId, defaultScriptPromptProfileId),
+        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
       }
     };
   }
@@ -1444,7 +1491,8 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
-        model: getNodeAiModel(node)
+        model: getNodeAiModel(node),
+        targetDurationSec: getTargetDurationSec(node.data.targetDurationSec)
       }
     };
   }
@@ -1535,6 +1583,7 @@ function getNodeRunLabel(node: CanvasNode) {
 function getJobTypeLabel(jobType: string) {
   const labels: Record<string, string> = {
     "generate-script": "生成文案",
+    "create-manual-script": "创建手写文案",
     "generate-storyboard": "生成分镜",
     "generate-image": "生成简笔画",
     "generate-tts": "生成配音",

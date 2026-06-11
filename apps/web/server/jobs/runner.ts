@@ -25,6 +25,8 @@ import {
 import { getProviders } from "@zeroflow/providers";
 import type { BirthChartInput } from "@zeroflow/providers";
 
+const defaultTargetDurationSec = 60;
+
 export async function runJob(jobId: string) {
   const job = getJob(jobId);
   if (!job) {
@@ -77,6 +79,8 @@ async function runJobByType(job: Job): Promise<Record<string, unknown>> {
   switch (job.type) {
     case "generate-script":
       return generateScript(job);
+    case "create-manual-script":
+      return createManualScript(job);
     case "generate-storyboard":
       return generateStoryboard(job);
     case "resolve-assets":
@@ -140,7 +144,7 @@ async function generateScript(job: Job) {
       numberInput(job.input.targetDurationSec) ??
       numberData(sourceNode, "targetDurationSec") ??
       numberData(scriptNode, "targetDurationSec") ??
-      45,
+      defaultTargetDurationSec,
     tone:
       stringInput(job.input.tone) ??
       stringData(sourceNode, "tone") ??
@@ -152,7 +156,10 @@ async function generateScript(job: Job) {
     description: result.data.hook,
     scriptText: result.data.scriptText,
     tone: result.data.tone,
-    targetDurationSec: result.data.targetDurationSec,
+    targetDurationSec:
+      numberInput(job.input.targetDurationSec) ??
+      numberData(sourceNode, "targetDurationSec") ??
+      result.data.targetDurationSec,
     sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
     aiModel: model,
     scriptProfileId,
@@ -171,6 +178,62 @@ async function generateScript(job: Job) {
     usedMock: result.usedMock,
     scriptNodeId: scriptNode?.id ?? "node-script",
     script: result.data
+  };
+}
+
+async function createManualScript(job: Job) {
+  const project = requireProject(job.projectId);
+  const topicNode = findNode(project.canvas, "topic");
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+  const scriptNode = findNode(project.canvas, "script");
+  const topic =
+    stringInput(job.input.topic) ??
+    stringData(sourceNode, "topic") ??
+    stringData(topicNode, "topic") ??
+    project.topic;
+  const scriptText =
+    stringInput(job.input.scriptText) ??
+    stringData(scriptNode, "scriptText") ??
+    "";
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "targetDurationSec") ??
+    numberData(scriptNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
+  const canvas = upsertScriptNode(project.canvas, sourceNode ?? topicNode, scriptNode, {
+    title: "文案",
+    description: scriptText ? "手写口播文案" : "",
+    scriptText,
+    targetDurationSec,
+    sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
+    aiModel: stringData(sourceNode, "aiModel") ?? stringData(scriptNode, "aiModel"),
+    scriptProfileId:
+      stringData(sourceNode, "scriptProfileId") ??
+      stringData(topicNode, "scriptProfileId") ??
+      stringData(scriptNode, "scriptProfileId") ??
+      defaultScriptPromptProfileId,
+    provider: "manual",
+    usedMock: false
+  });
+
+  updateVideoProject(project.id, {
+    topic,
+    canvas
+  });
+
+  return {
+    provider: "manual",
+    usedMock: false,
+    scriptNodeId: scriptNode?.id ?? "node-script",
+    script: {
+      title: "文案",
+      hook: "",
+      scriptText,
+      tone: "手写",
+      targetDurationSec
+    }
   };
 }
 
@@ -200,7 +263,12 @@ async function generateStoryboard(job: Job) {
     scriptText,
     sceneCount,
     model,
-    targetDurationSec: numberInput(job.input.targetDurationSec) ?? 45
+    targetDurationSec:
+      numberInput(job.input.targetDurationSec) ??
+      numberData(sourceNode, "targetDurationSec") ??
+      numberData(scriptNode, "targetDurationSec") ??
+      numberData(storyboardNode, "targetDurationSec") ??
+      defaultTargetDurationSec
   });
   const canvas = applyStoryboard(project.canvas, sourceNode ?? scriptNode ?? storyboardNode, result.data.scenes, {
     aiModel: model

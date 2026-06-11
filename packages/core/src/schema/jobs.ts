@@ -3,6 +3,7 @@ import { idSchema, isoDateSchema, metadataSchema } from "./primitives";
 
 export const jobTypeSchema = z.enum([
   "generate-script",
+  "create-manual-script",
   "generate-storyboard",
   "resolve-assets",
   "generate-chart",

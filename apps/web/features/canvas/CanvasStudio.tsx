@@ -42,6 +42,11 @@ import {
   getSceneImageModel,
   imageModelOptions
 } from "./aiModels";
+import {
+  getAiPromptDataKey,
+  getAiPromptRows,
+  getAiPromptValue
+} from "./aiNodeInputs";
 
 type SaveState = "saved" | "saving" | "unsaved" | "restored" | "error";
 type CanvasDragState =
@@ -825,6 +830,7 @@ function InspectorPanel({
     : null;
   const assetUrl = getNodeAssetUrl(node);
   const aiModelTarget = getAiModelTarget(node.kind);
+  const aiPromptDataKey = getAiPromptDataKey(node.kind);
   const content = (
     <>
       <header>
@@ -895,22 +901,37 @@ function InspectorPanel({
         </section>
       ) : null}
 
-      <label>
-        标题
-        <input
-          value={getNodeTitle(node)}
-          onChange={(event) => onDataChange("title", event.currentTarget.value)}
-        />
-      </label>
+      {!aiPromptDataKey ? (
+        <>
+          <label>
+            标题
+            <input
+              value={getNodeTitle(node)}
+              onChange={(event) => onDataChange("title", event.currentTarget.value)}
+            />
+          </label>
 
-      <label>
-        描述
-        <textarea
-          rows={3}
-          value={getNodeDescription(node)}
-          onChange={(event) => onDataChange("description", event.currentTarget.value)}
-        />
-      </label>
+          <label>
+            描述
+            <textarea
+              rows={3}
+              value={getNodeDescription(node)}
+              onChange={(event) => onDataChange("description", event.currentTarget.value)}
+            />
+          </label>
+        </>
+      ) : null}
+
+      {aiPromptDataKey ? (
+        <label>
+          提示词
+          <textarea
+            rows={getAiPromptRows(node.kind)}
+            value={getAiPromptValue(node)}
+            onChange={(event) => onDataChange(aiPromptDataKey, event.currentTarget.value)}
+          />
+        </label>
+      ) : null}
 
       {aiModelTarget ? (
         <label>
@@ -925,28 +946,6 @@ function InspectorPanel({
               </option>
             ))}
           </select>
-        </label>
-      ) : null}
-
-      {node.kind === "topic" ? (
-        <label>
-          主题
-          <textarea
-            rows={3}
-            value={getString(node.data.topic, getString(node.data.description, ""))}
-            onChange={(event) => onDataChange("topic", event.currentTarget.value)}
-          />
-        </label>
-      ) : null}
-
-      {node.kind === "script" ? (
-        <label>
-          文案正文
-          <textarea
-            rows={7}
-            value={getString(node.data.scriptText, "")}
-            onChange={(event) => onDataChange("scriptText", event.currentTarget.value)}
-          />
         </label>
       ) : null}
 
@@ -1164,17 +1163,6 @@ function InspectorPanel({
         </>
       ) : null}
 
-      {node.kind === "image" ? (
-        <label>
-          图片提示词
-          <textarea
-            rows={5}
-            value={getString(node.data.prompt, getString(node.data.visualPrompt, ""))}
-            onChange={(event) => onDataChange("prompt", event.currentTarget.value)}
-          />
-        </label>
-      ) : null}
-
       {node.kind === "chart" ? (
         <div className="inspector-grid">
           <label>
@@ -1302,27 +1290,31 @@ function InspectorPanel({
 
       {!isInline ? (
         <>
-          <label>
-            原始数据
-            <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              try {
-                const parsed = JSON.parse(rawData) as unknown;
-                const parsedData = recordData(parsed);
+          {!aiPromptDataKey ? (
+            <>
+              <label>
+                原始数据
+                <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    const parsed = JSON.parse(rawData) as unknown;
+                    const parsedData = recordData(parsed);
 
-                if (parsedData) {
-                  onDataReplace(parsedData);
-                }
-              } catch {
-                // ignore parse errors for now
-              }
-            }}
-          >
-            应用 JSON
-          </button>
+                    if (parsedData) {
+                      onDataReplace(parsedData);
+                    }
+                  } catch {
+                    // ignore parse errors for now
+                  }
+                }}
+              >
+                应用 JSON
+              </button>
+            </>
+          ) : null}
 
           <VideoPreviewPanel previewSpec={previewSpec} />
         </>
@@ -1447,6 +1439,12 @@ function getNodeTitle(node: CanvasNode) {
 }
 
 function getNodeDescription(node: CanvasNode) {
+  if ((node.kind === "topic" || node.kind === "image") && getAiPromptValue(node)) {
+    return translateLegacyNodeDescription(
+      getAiPromptValue(node) || getString(node.data.description, nodeKindDescriptions[node.kind])
+    );
+  }
+
   return translateLegacyNodeDescription(
     getString(node.data.description, nodeKindDescriptions[node.kind])
   );
@@ -1457,7 +1455,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-script",
       input: {
-        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short")),
+        topic: getAiPromptValue(node) || "Astrology teaching short",
         model: getNodeAiModel(node)
       }
     };
@@ -1467,7 +1465,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-storyboard",
       input: {
-        scriptText: getString(node.data.scriptText, ""),
+        scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
         model: getNodeAiModel(node)
       }
@@ -1478,10 +1476,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-image",
       input: {
-        prompt: getString(
-          node.data.prompt,
-          getString(node.data.description, "simple educational astrology line drawing")
-        ),
+        prompt: getAiPromptValue(node) || "simple educational astrology line drawing",
         model: getNodeAiModel(node)
       }
     };

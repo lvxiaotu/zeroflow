@@ -60,6 +60,11 @@ import {
   imageModelOptions
 } from "../canvas/aiModels";
 import {
+  getAiPromptDataKey,
+  getAiPromptRows,
+  getAiPromptValue
+} from "../canvas/aiNodeInputs";
+import {
   getCreateExportJobRequest,
   getCreatePreviewJobRequest
 } from "../canvas/productionFlowJobs";
@@ -785,6 +790,7 @@ function TldrawNodeInspector({
     ? getLiveProviderRunGuard(nodeJobRequest.type, providerHealth, nodeJobRequest.input)
     : null;
   const aiModelTarget = getAiModelTarget(node.kind);
+  const aiPromptDataKey = getAiPromptDataKey(node.kind);
   const d3Diagram = getString(node.data.diagram, "timeline");
   const d3Preset = getD3VisualPreset(getString(node.data.visualPreset, d3Diagram));
   const d3JsonStatus = d3DataJsonStatus(d3Diagram, getString(node.data.dataJson, ""));
@@ -874,24 +880,40 @@ function TldrawNodeInspector({
         </section>
       ) : null}
 
-      <label>
-        Title
-        <input
-          name="title"
-          value={getString(node.data.title, "")}
-          onChange={(event) => onDataChange(node.id, "title", event.currentTarget.value)}
-        />
-      </label>
+      {!aiPromptDataKey ? (
+        <>
+          <label>
+            Title
+            <input
+              name="title"
+              value={getString(node.data.title, "")}
+              onChange={(event) => onDataChange(node.id, "title", event.currentTarget.value)}
+            />
+          </label>
 
-      <label>
-        Description
-        <textarea
-          name="description"
-          rows={3}
-          value={getString(node.data.description, "")}
-          onChange={(event) => onDataChange(node.id, "description", event.currentTarget.value)}
-        />
-      </label>
+          <label>
+            Description
+            <textarea
+              name="description"
+              rows={3}
+              value={getString(node.data.description, "")}
+              onChange={(event) => onDataChange(node.id, "description", event.currentTarget.value)}
+            />
+          </label>
+        </>
+      ) : null}
+
+      {aiPromptDataKey ? (
+        <label>
+          提示词
+          <textarea
+            name={aiPromptDataKey}
+            rows={getAiPromptRows(node.kind)}
+            value={getAiPromptValue(node)}
+            onChange={(event) => onDataChange(node.id, aiPromptDataKey, event.currentTarget.value)}
+          />
+        </label>
+      ) : null}
 
       {aiModelTarget ? (
         <label>
@@ -907,18 +929,6 @@ function TldrawNodeInspector({
               </option>
             ))}
           </select>
-        </label>
-      ) : null}
-
-      {node.kind === "script" ? (
-        <label>
-          Script text
-          <textarea
-            name="scriptText"
-            rows={7}
-            value={getString(node.data.scriptText, "")}
-            onChange={(event) => onDataChange(node.id, "scriptText", event.currentTarget.value)}
-          />
         </label>
       ) : null}
 
@@ -1160,18 +1170,6 @@ function TldrawNodeInspector({
             />
           </label>
         </>
-      ) : null}
-
-      {node.kind === "image" ? (
-        <label>
-          Image prompt
-          <textarea
-            name="prompt"
-            rows={5}
-            value={getString(node.data.prompt, "")}
-            onChange={(event) => onDataChange(node.id, "prompt", event.currentTarget.value)}
-          />
-        </label>
       ) : null}
 
       {node.kind === "d3" ? (
@@ -1595,7 +1593,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-script",
       input: {
-        topic: getString(node.data.topic, getString(node.data.description, "Astrology teaching short")),
+        topic: getAiPromptValue(node) || "Astrology teaching short",
         model: getNodeAiModel(node)
       }
     };
@@ -1605,7 +1603,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-storyboard",
       input: {
-        scriptText: getString(node.data.scriptText, ""),
+        scriptText: getAiPromptValue(node),
         sceneCount: getNumber(node.data.sceneCount, 5),
         model: getNodeAiModel(node)
       }
@@ -1616,10 +1614,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return {
       type: "generate-image",
       input: {
-        prompt: getString(
-          node.data.prompt,
-          getString(node.data.description, "simple educational astrology line drawing")
-        ),
+        prompt: getAiPromptValue(node) || "simple educational astrology line drawing",
         model: getNodeAiModel(node)
       }
     };

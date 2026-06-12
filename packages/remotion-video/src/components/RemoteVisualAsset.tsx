@@ -28,7 +28,6 @@ export function RemoteVisualAsset({
     let active = true;
     let completed = false;
     let objectUrl: string | null = null;
-    const controller = new AbortController();
     const releaseRenderHandle = () => {
       if (!renderReleasedRef.current) {
         renderReleasedRef.current = true;
@@ -36,7 +35,7 @@ export function RemoteVisualAsset({
       }
     };
 
-    fetch(src, { signal: controller.signal })
+    fetch(src)
       .then(async (response) => {
         if (!response.ok) {
           throw new Error(`Visual asset request failed: ${response.status}`);
@@ -60,16 +59,17 @@ export function RemoteVisualAsset({
         }
 
         const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-
-        if (active) {
-          setAsset({ kind: "image", objectUrl });
-          completed = true;
-          releaseRenderHandle();
+        if (!active) {
+          return;
         }
+
+        objectUrl = URL.createObjectURL(blob);
+        setAsset({ kind: "image", objectUrl });
+        completed = true;
+        releaseRenderHandle();
       })
       .catch((error: unknown) => {
-        if (!active || isExpectedAbort(error, controller.signal)) {
+        if (!active) {
           return;
         }
 
@@ -83,7 +83,6 @@ export function RemoteVisualAsset({
 
       if (!completed) {
         completed = true;
-        controller.abort(createExpectedAbortReason());
         releaseRenderHandle();
       }
 
@@ -123,24 +122,4 @@ export function RemoteVisualAsset({
       }}
     />
   );
-}
-
-function createExpectedAbortReason() {
-  if (typeof DOMException !== "undefined") {
-    return new DOMException("Remote visual asset request was disposed", "AbortError");
-  }
-
-  return new Error("Remote visual asset request was disposed");
-}
-
-function isExpectedAbort(error: unknown, signal: AbortSignal) {
-  if (!signal.aborted) {
-    return false;
-  }
-
-  if (error === signal.reason) {
-    return true;
-  }
-
-  return typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError";
 }

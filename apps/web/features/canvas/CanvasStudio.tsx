@@ -1372,7 +1372,7 @@ function InspectorPanel({
             </>
           ) : null}
 
-          <VideoPreviewPanel previewSpec={previewSpec} />
+          <NodePreviewPanel node={node} previewSpec={previewSpec} />
         </>
       ) : null}
     </>
@@ -1398,15 +1398,98 @@ function InspectorPanel({
   );
 }
 
-function VideoPreviewPanel({ previewSpec }: { previewSpec: AstroVideoSpec }) {
+function NodePreviewPanel({ node, previewSpec }: { node: CanvasNode; previewSpec: AstroVideoSpec }) {
+  if (isSingleAssetPreviewNode(node)) {
+    return <AssetPreviewPanel assetUrl={getNodeAssetUrl(node)} node={node} />;
+  }
+
+  const scopedSpec = getScopedVideoPreviewSpec(node, previewSpec);
+
+  if (scopedSpec) {
+    return <VideoPreviewPanel label={getVideoPreviewLabel(node)} previewSpec={scopedSpec} />;
+  }
+
+  return (
+    <section className="asset-preview-panel">
+      <header>
+        <strong>预览</strong>
+        <span>当前节点没有画面预览</span>
+      </header>
+      <div className="asset-preview-empty">
+        <strong>{nodeKindLabels[node.kind]}</strong>
+        <span>选择分镜、画面合成、预览或导出节点查看视频预览。</span>
+      </div>
+    </section>
+  );
+}
+
+function AssetPreviewPanel({ assetUrl, node }: { assetUrl: string; node: CanvasNode }) {
+  const previewText = getAssetPreviewText(node);
+  const isAudio = node.kind === "voice" || node.kind === "music";
+  const isVisual = node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
+
+  return (
+    <section className="asset-preview-panel">
+      <header>
+        <strong>{nodeKindLabels[node.kind]}预览</strong>
+        <span>单个素材</span>
+      </header>
+
+      {node.kind === "caption" ? (
+        <div className="caption-asset-preview">
+          <div
+            className="caption-asset-preview-text"
+            style={{
+              bottom: `${100 - clampNumber(getNumber(node.data.yPercent, 78), 0, 100)}%`,
+              color: getString(node.data.color, "#ffffff"),
+              fontSize: `${Math.round(clampNumber(getNumber(node.data.fontSize, 48), 20, 96) * 0.42)}px`
+            }}
+          >
+            {previewText || "字幕文本"}
+          </div>
+        </div>
+      ) : null}
+
+      {isAudio ? (
+        <div className="audio-asset-preview">
+          {assetUrl ? <audio controls src={assetUrl} /> : <span>暂无音频文件，仅显示配音配置。</span>}
+        </div>
+      ) : null}
+
+      {isVisual ? (
+        <div className="visual-asset-preview">
+          {assetUrl ? (
+            <object aria-label={getNodeTitle(node)} data={assetUrl} />
+          ) : (
+            <span>素材尚未生成。生成后这里会直接显示图片或视觉文件。</span>
+          )}
+        </div>
+      ) : null}
+
+      <p>{previewText}</p>
+    </section>
+  );
+}
+
+function VideoPreviewPanel({
+  label = "视频预览",
+  previewSpec
+}: {
+  label?: string;
+  previewSpec: AstroVideoSpec;
+}) {
   const size = getCompositionSize(previewSpec.format);
   const durationInFrames = getSpecDurationFrames(previewSpec);
+  const durationSec = previewSpec.fps > 0 ? durationInFrames / previewSpec.fps : 0;
 
   return (
     <section className="video-preview-panel">
       <header>
-        <strong>预览</strong>
-        <span>{previewSpec.title}</span>
+        <strong>{label}</strong>
+        <span>
+          {previewSpec.title}
+          {durationSec > 0 ? ` · ${formatDurationSec(durationSec)}` : ""}
+        </span>
       </header>
       <div className="video-preview-frame" style={{ aspectRatio: `${size.width} / ${size.height}` }}>
         {durationInFrames > 0 ? (
@@ -1427,6 +1510,80 @@ function VideoPreviewPanel({ previewSpec }: { previewSpec: AstroVideoSpec }) {
       </div>
     </section>
   );
+}
+
+function isSingleAssetPreviewNode(node: CanvasNode) {
+  return ["caption", "voice", "music", "chart", "image", "d3", "three"].includes(node.kind);
+}
+
+function getScopedVideoPreviewSpec(node: CanvasNode, previewSpec: AstroVideoSpec): AstroVideoSpec | null {
+  if (node.kind === "storyboard" || node.kind === "preview" || node.kind === "export") {
+    return previewSpec;
+  }
+
+  if (node.kind === "scene" || node.kind === "composition") {
+    const sceneId =
+      node.kind === "scene"
+        ? (node.refId ?? node.id)
+        : getString(node.data.sceneId, getString(node.data.sourceSceneRefId, ""));
+    const scene = previewSpec.scenes.find((item) => item.id === sceneId);
+
+    if (!scene) {
+      return null;
+    }
+
+    return {
+      ...previewSpec,
+      title: scene.title,
+      scenes: [scene],
+      audio: {
+        tracks: []
+      }
+    };
+  }
+
+  return null;
+}
+
+function getVideoPreviewLabel(node: CanvasNode) {
+  if (node.kind === "scene") {
+    return "分镜预览";
+  }
+
+  if (node.kind === "composition") {
+    return "画面合成预览";
+  }
+
+  return "整片预览";
+}
+
+function getAssetPreviewText(node: CanvasNode) {
+  const caption = recordData(node.data.caption);
+  const cues = Array.isArray(node.data.cues) ? node.data.cues : Array.isArray(caption?.cues) ? caption.cues : [];
+  const firstCue = cues.find((cue) => recordData(cue));
+  const cueText = firstCue ? getString(recordData(firstCue)?.text, "") : "";
+
+  return (
+    cueText ||
+    getString(node.data.description, "") ||
+    getString(caption?.text, "") ||
+    getString(node.data.prompt, "") ||
+    getString(node.data.visualPrompt, "") ||
+    getString(node.data.dataJson, "") ||
+    getString(node.data.assetUrl, "")
+  );
+}
+
+function formatDurationSec(value: number) {
+  const total = Math.max(0, Math.round(value));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+
+  if (minutes <= 0) {
+    return `${seconds}秒`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function resolveInitialCanvasNodeId(nodes: CanvasNode[], nodeId?: string) {

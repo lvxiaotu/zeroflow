@@ -81,7 +81,7 @@ import {
   isZeroFlowNodeShape,
   loadCanvasIntoTldraw,
   syncTldrawEdges,
-  updateTldrawNodeShape
+  updateTldrawNodeShapes
 } from "./adapter";
 import { ZeroFlowNodeShapeUtil, zeroFlowNodeShapeType } from "./ZeroFlowNodeShape";
 
@@ -429,7 +429,7 @@ export function TldrawCanvasClient({
       setStatusText("Inspector changed");
 
       if (editor && nextNode) {
-        updateTldrawNodeShape(editor, nextNode);
+        updateTldrawNodeShapes(editor, nextCanvas);
         syncTldrawEdges(editor, nextCanvas);
       }
 

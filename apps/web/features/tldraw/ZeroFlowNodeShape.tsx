@@ -28,6 +28,9 @@ export type ZeroFlowNodeShapeProps = {
   provider: string;
   cueCount: number;
   durationSec: number;
+  scenePreviewAssetUrl: string;
+  scenePreviewAssetKind: string;
+  scenePreviewCaption: string;
   actionLabel: string;
   hasAction: boolean;
 };
@@ -56,6 +59,9 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
     provider: T.string,
     cueCount: T.number,
     durationSec: T.number,
+    scenePreviewAssetUrl: T.string,
+    scenePreviewAssetKind: T.string,
+    scenePreviewCaption: T.string,
     actionLabel: T.string,
     hasAction: T.boolean
   };
@@ -83,6 +89,9 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
       provider: "",
       cueCount: 0,
       durationSec: 0,
+      scenePreviewAssetUrl: "",
+      scenePreviewAssetKind: "",
+      scenePreviewCaption: "",
       actionLabel: "",
       hasAction: false
     };
@@ -90,7 +99,11 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
 
   override component(shape: ZeroFlowNodeShape) {
     const props = shape.props;
-    const hasVisualPreview = props.assetUrl.length > 0 && isVisualAsset(props.assetKind);
+    const hasScenePreview =
+      props.kind === "scene" &&
+      (props.scenePreviewAssetUrl.length > 0 || props.scenePreviewCaption.length > 0);
+    const hasVisualPreview =
+      !hasScenePreview && props.assetUrl.length > 0 && isVisualAsset(props.assetKind);
     const hasCaptionPreview = props.kind === "caption" && props.description.length > 0;
     const hasAudioPreview = props.kind === "voice" || props.kind === "music" || props.assetKind === "voice";
     const hasMeta =
@@ -111,6 +124,22 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
 
         <strong className="zeroflow-tl-title">{props.title}</strong>
         {props.description ? <span className="zeroflow-tl-description">{props.description}</span> : null}
+
+        {hasScenePreview ? (
+          <div
+            className="zeroflow-tl-scene-preview"
+            data-asset-kind={props.scenePreviewAssetKind || "caption"}
+          >
+            {props.scenePreviewAssetUrl ? (
+              <img alt="" draggable={false} src={props.scenePreviewAssetUrl} />
+            ) : (
+              <span className="zeroflow-tl-scene-preview-empty" />
+            )}
+            {props.scenePreviewCaption ? (
+              <span className="zeroflow-tl-scene-caption">{props.scenePreviewCaption}</span>
+            ) : null}
+          </div>
+        ) : null}
 
         {hasVisualPreview || hasCaptionPreview || hasAudioPreview ? (
           <div className="zeroflow-tl-preview" data-asset-kind={props.assetKind || props.kind}>

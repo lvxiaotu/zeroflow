@@ -55,7 +55,7 @@ export function loadCanvasIntoTldraw(editor: Editor, canvas: CanvasDocument) {
       editor.deleteShapes(currentShapes.map((shape) => shape.id));
     }
 
-    editor.createShapes(canvas.nodes.map(nodeToZeroFlowNodeShape));
+    editor.createShapes(canvas.nodes.map((node) => nodeToZeroFlowNodeShape(node, canvas)));
     syncTldrawEdges(editor, canvas);
     editor.zoomToFit();
   });
@@ -141,7 +141,7 @@ export function isZeroFlowNodeShape(shape: TLShape): shape is ZeroFlowNodeShape 
   return shape.type === zeroFlowNodeShapeType && typeof shape.meta[nodeShapeMetaKey] === "string";
 }
 
-export function updateTldrawNodeShape(editor: Editor, node: CanvasNode) {
+export function updateTldrawNodeShape(editor: Editor, node: CanvasNode, canvas?: CanvasDocument) {
   const shape = editor
     .getCurrentPageShapes()
     .find((item) => isZeroFlowNodeShape(item) && item.props.nodeId === node.id);
@@ -153,18 +153,24 @@ export function updateTldrawNodeShape(editor: Editor, node: CanvasNode) {
   editor.updateShape({
     id: shape.id,
     type: zeroFlowNodeShapeType,
-    props: zeroFlowNodeShapePropsFromNode(node)
+    props: zeroFlowNodeShapePropsFromNode(node, canvas)
   });
 }
 
-function nodeToZeroFlowNodeShape(node: CanvasNode) {
+export function updateTldrawNodeShapes(editor: Editor, canvas: CanvasDocument) {
+  for (const node of canvas.nodes) {
+    updateTldrawNodeShape(editor, node, canvas);
+  }
+}
+
+function nodeToZeroFlowNodeShape(node: CanvasNode, canvas: CanvasDocument) {
   return {
     id: nodeShapeId(node.id),
     type: zeroFlowNodeShapeType,
     x: node.position.x,
     y: node.position.y,
     opacity: node.status === "failed" ? 0.7 : 1,
-    props: zeroFlowNodeShapePropsFromNode(node),
+    props: zeroFlowNodeShapePropsFromNode(node, canvas),
     meta: {
       [nodeShapeMetaKey]: node.id,
       zeroflowNodeKind: node.kind
@@ -172,13 +178,18 @@ function nodeToZeroFlowNodeShape(node: CanvasNode) {
   };
 }
 
-function zeroFlowNodeShapePropsFromNode(node: CanvasNode): ZeroFlowNodeShape["props"] {
+function zeroFlowNodeShapePropsFromNode(
+  node: CanvasNode,
+  canvas?: CanvasDocument
+): ZeroFlowNodeShape["props"] {
   const actionLabel = nodeActionLabel(node);
   const assetUrl = nodeAssetUrl(node);
+  const scenePreview = getScenePreviewProps(node, canvas);
+  const displaySize = nodeDisplaySize(node, assetUrl, scenePreview);
 
   return {
-    w: node.size.width,
-    h: node.size.height,
+    w: displaySize.width,
+    h: displaySize.height,
     nodeId: node.id,
     kind: node.kind,
     status: node.status,
@@ -190,8 +201,53 @@ function zeroFlowNodeShapePropsFromNode(node: CanvasNode): ZeroFlowNodeShape["pr
     provider: nodeProvider(node),
     cueCount: nodeCueCount(node),
     durationSec: nodeDurationSec(node),
+    scenePreviewAssetUrl: scenePreview.assetUrl,
+    scenePreviewAssetKind: scenePreview.assetKind,
+    scenePreviewCaption: scenePreview.caption,
     actionLabel,
     hasAction: actionLabel.length > 0
+  };
+}
+
+function nodeDisplaySize(
+  node: CanvasNode,
+  assetUrl: string,
+  scenePreview: ReturnType<typeof getScenePreviewProps>
+) {
+  if (node.kind === "scene" && (scenePreview.assetUrl || scenePreview.caption)) {
+    return {
+      width: Math.max(node.size.width, 360),
+      height: Math.max(node.size.height, 300)
+    };
+  }
+
+  if (assetUrl && (node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three")) {
+    return {
+      width: Math.max(node.size.width, 360),
+      height: Math.max(node.size.height, 280)
+    };
+  }
+
+  return node.size;
+}
+
+function getScenePreviewProps(node: CanvasNode, canvas: CanvasDocument | undefined) {
+  if (node.kind !== "scene" || !canvas) {
+    return {
+      assetUrl: "",
+      assetKind: "",
+      caption: ""
+    };
+  }
+
+  const visualNode = findSceneVisualPreviewNode(canvas, node);
+  const assetUrl = visualNode ? nodeAssetUrl(visualNode) : "";
+  const captionNode = findSceneResourceNode(canvas, node, "caption");
+
+  return {
+    assetUrl,
+    assetKind: visualNode ? nodeAssetKind(visualNode, assetUrl) : "",
+    caption: sceneCaptionText(captionNode)
   };
 }
 
@@ -326,6 +382,66 @@ function nodeAssetKind(node: CanvasNode, assetUrl: string) {
   return "asset";
 }
 
+type ScenePreviewResourceKind = Extract<
+  CanvasNodeKind,
+  "caption" | "chart" | "image" | "d3" | "three"
+>;
+
+const scenePreviewVisualKinds: ScenePreviewResourceKind[] = ["image", "chart", "d3", "three"];
+
+function findSceneVisualPreviewNode(canvas: CanvasDocument, sceneNode: CanvasNode) {
+  return scenePreviewVisualKinds
+    .map((kind) => findSceneResourceNode(canvas, sceneNode, kind))
+    .find((node): node is CanvasNode => Boolean(node && nodeAssetUrl(node)));
+}
+
+function findSceneResourceNode(
+  canvas: CanvasDocument,
+  sceneNode: CanvasNode,
+  kind: ScenePreviewResourceKind
+) {
+  const sceneId = sceneNode.refId ?? sceneNode.id;
+  const safeSceneRefId = `${kind}-${safeId(sceneId)}`;
+  const directSceneRefId = `${kind}-${sceneId}`;
+
+  return canvas.nodes.find(
+    (node) =>
+      node.kind === kind &&
+      (stringData(node.data.sourceSceneNodeId) === sceneNode.id ||
+        stringData(node.data.sceneNodeId) === sceneNode.id ||
+        stringData(node.data.sceneId) === sceneId ||
+        node.refId === safeSceneRefId ||
+        node.refId === directSceneRefId ||
+        (kind === "caption" && node.refId === sceneId))
+  );
+}
+
+function sceneCaptionText(captionNode: CanvasNode | undefined) {
+  if (!captionNode) {
+    return "";
+  }
+
+  const caption = recordData(captionNode.data.caption);
+  const cueText = firstCueText(arrayData(captionNode.data.cues) ?? arrayData(caption?.cues));
+  const candidates = [
+    stringData(captionNode.data.description),
+    stringData(captionNode.data.text),
+    typeof captionNode.data.caption === "string" ? captionNode.data.caption : undefined,
+    stringData(caption?.text),
+    cueText
+  ];
+
+  return compactText(candidates.find((value) => value && value.trim().length > 0) ?? "", 96);
+}
+
+function firstCueText(cues: unknown[] | undefined) {
+  const firstCue = cues
+    ?.map((cue) => recordData(cue))
+    .find((cue) => typeof cue?.text === "string" && cue.text.trim().length > 0);
+
+  return typeof firstCue?.text === "string" ? firstCue.text : undefined;
+}
+
 function nodeProvider(node: CanvasNode) {
   const caption = recordData(node.data.caption);
   return (
@@ -384,6 +500,10 @@ function compactText(value: string, limit: number) {
   }
 
   return `${normalized.slice(0, Math.max(0, limit - 1))}...`;
+}
+
+function safeId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
 
 function roundCanvasNumber(value: number) {

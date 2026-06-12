@@ -16,6 +16,8 @@ import { Player } from "@remotion/player";
 import { AstroVideoComposition, getCompositionSize } from "@zeroflow/remotion-video";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+/* eslint-disable @next/next/no-img-element */
+
 import {
   defaultPreviewFrame,
   getExportFrameRange,
@@ -617,11 +619,13 @@ export function CanvasStudio({
               {canvasDoc.edges.map((edge) => {
                 const fromNode = getDisplayNodeForEdge(
                   canvasDoc.nodes.find((node) => node.id === edge.fromNodeId),
-                  expandedNodeId
+                  expandedNodeId,
+                  canvasDoc
                 );
                 const toNode = getDisplayNodeForEdge(
                   canvasDoc.nodes.find((node) => node.id === edge.toNodeId),
-                  expandedNodeId
+                  expandedNodeId,
+                  canvasDoc
                 );
 
                 if (!fromNode || !toNode) {
@@ -646,7 +650,7 @@ export function CanvasStudio({
             </svg>
             {canvasDoc.nodes.map((node) => {
               const isExpanded = node.id === expandedNodeId;
-              const displaySize = getDisplayNodeSize(node, isExpanded);
+              const displaySize = getDisplayNodeSize(node, isExpanded, canvasDoc);
 
               return (
                 <article
@@ -682,6 +686,7 @@ export function CanvasStudio({
                   {node.kind === "topic" && node.data.topic ? (
                     <p className="node-topic-line">{String(node.data.topic)}</p>
                   ) : null}
+                  <NodeCardScenePreview canvas={canvasDoc} node={node} />
                   <NodeCardAssetPreview node={node} />
                   <footer>
                     <small>{nodeKindLabels[node.kind]}</small>
@@ -1427,7 +1432,7 @@ function NodeCardAssetPreview({ node }: { node: CanvasNode }) {
     return (
       <div className="node-card-asset-preview node-card-visual-preview" aria-label="素材预览">
         {assetUrl ? (
-          <object aria-label={getNodeTitle(node)} data={assetUrl} />
+          <img alt={getNodeTitle(node)} draggable={false} src={assetUrl} />
         ) : (
           <span>{previewText || "等待生成素材"}</span>
         )}
@@ -1447,6 +1452,40 @@ function NodeCardAssetPreview({ node }: { node: CanvasNode }) {
   }
 
   return null;
+}
+
+function NodeCardScenePreview({
+  canvas,
+  node
+}: {
+  canvas: CanvasDocument;
+  node: CanvasNode;
+}) {
+  const preview = getSceneCardPreview(canvas, node);
+
+  if (!preview) {
+    return null;
+  }
+
+  return (
+    <div className="node-card-scene-preview" aria-label="分镜预览">
+      {preview.assetUrl ? (
+        <img alt={getNodeTitle(node)} draggable={false} src={preview.assetUrl} />
+      ) : (
+        <span className="node-card-scene-preview-empty" />
+      )}
+      {preview.caption ? (
+        <span
+          className="node-card-scene-caption"
+          style={{
+            color: preview.captionColor
+          }}
+        >
+          {preview.caption}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function NodePreviewPanel({ node, previewSpec }: { node: CanvasNode; previewSpec: AstroVideoSpec }) {
@@ -1510,7 +1549,7 @@ function AssetPreviewPanel({ assetUrl, node }: { assetUrl: string; node: CanvasN
       {isVisual ? (
         <div className="visual-asset-preview">
           {assetUrl ? (
-            <object aria-label={getNodeTitle(node)} data={assetUrl} />
+            <img alt={getNodeTitle(node)} draggable={false} src={assetUrl} />
           ) : (
             <span>素材尚未生成。生成后这里会直接显示图片或视觉文件。</span>
           )}
@@ -1645,25 +1684,46 @@ function resolveInitialCanvasNodeId(nodes: CanvasNode[], nodeId?: string) {
   return nodes[0]?.id;
 }
 
-function getDisplayNodeSize(node: CanvasNode, expanded: boolean): CanvasNode["size"] {
+function getDisplayNodeSize(
+  node: CanvasNode,
+  expanded: boolean,
+  canvas?: CanvasDocument
+): CanvasNode["size"] {
+  const hasVisualAsset =
+    Boolean(getNodeAssetUrl(node)) &&
+    (node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three");
+  const hasScenePreview = Boolean(canvas && getSceneCardPreview(canvas, node));
+  const previewSize = {
+    width: hasScenePreview || hasVisualAsset ? Math.max(node.size.width, 420) : node.size.width,
+    height: hasScenePreview
+      ? Math.max(node.size.height, 380)
+      : hasVisualAsset
+        ? Math.max(node.size.height, 390)
+        : node.size.height
+  };
+
   if (!expanded) {
-    return node.size;
+    return previewSize;
   }
 
   return {
-    width: Math.max(node.size.width, 420),
-    height: Math.max(node.size.height, 560)
+    width: Math.max(previewSize.width, 420),
+    height: Math.max(previewSize.height, 560)
   };
 }
 
-function getDisplayNodeForEdge(node: CanvasNode | undefined, expandedNodeId: string | undefined) {
+function getDisplayNodeForEdge(
+  node: CanvasNode | undefined,
+  expandedNodeId: string | undefined,
+  canvas?: CanvasDocument
+) {
   if (!node) {
     return null;
   }
 
   return {
     ...node,
-    size: getDisplayNodeSize(node, node.id === expandedNodeId)
+    size: getDisplayNodeSize(node, node.id === expandedNodeId, canvas)
   };
 }
 
@@ -2051,10 +2111,65 @@ function getNodeAssetUrl(node: CanvasNode) {
   );
 }
 
+type SceneCardResourceKind = Extract<
+  CanvasNodeKind,
+  "caption" | "chart" | "image" | "d3" | "three"
+>;
+
+const sceneCardVisualKinds: SceneCardResourceKind[] = ["image", "chart", "d3", "three"];
+
+function getSceneCardPreview(canvas: CanvasDocument, node: CanvasNode) {
+  if (node.kind !== "scene") {
+    return null;
+  }
+
+  const visualNode = sceneCardVisualKinds
+    .map((kind) => findSceneCardResourceNode(canvas, node, kind))
+    .find((resourceNode): resourceNode is CanvasNode => Boolean(resourceNode && getNodeAssetUrl(resourceNode)));
+  const captionNode = findSceneCardResourceNode(canvas, node, "caption");
+  const assetUrl = visualNode ? getNodeAssetUrl(visualNode) : "";
+  const caption = captionNode ? getAssetPreviewText(captionNode) : "";
+
+  if (!assetUrl && !caption) {
+    return null;
+  }
+
+  return {
+    assetUrl,
+    caption: compactPreviewText(caption, 80),
+    captionColor: captionNode ? getString(captionNode.data.color, "#ffffff") : "#ffffff"
+  };
+}
+
+function findSceneCardResourceNode(
+  canvas: CanvasDocument,
+  sceneNode: CanvasNode,
+  kind: SceneCardResourceKind
+) {
+  const sceneId = sceneNode.refId ?? sceneNode.id;
+  const directRefId = `${kind}-${sceneId}`;
+  const safeRefId = `${kind}-${safeId(sceneId)}`;
+
+  return canvas.nodes.find(
+    (node) =>
+      node.kind === kind &&
+      (getString(node.data.sourceSceneNodeId, "") === sceneNode.id ||
+        getString(node.data.sceneNodeId, "") === sceneNode.id ||
+        getString(node.data.sceneId, "") === sceneId ||
+        node.refId === directRefId ||
+        node.refId === safeRefId ||
+        (kind === "caption" && node.refId === sceneId))
+  );
+}
+
 function recordData(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function safeId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
 
 function getEdgePath(fromNode: CanvasNode, toNode: CanvasNode) {

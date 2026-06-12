@@ -682,6 +682,7 @@ export function CanvasStudio({
                   {node.kind === "topic" && node.data.topic ? (
                     <p className="node-topic-line">{String(node.data.topic)}</p>
                   ) : null}
+                  <NodeCardAssetPreview node={node} />
                   <footer>
                     <small>{nodeKindLabels[node.kind]}</small>
                     <span data-status={node.status}>{getNodeStatusLabel(node.status)}</span>
@@ -1396,6 +1397,56 @@ function InspectorPanel({
       {content}
     </aside>
   );
+}
+
+function NodeCardAssetPreview({ node }: { node: CanvasNode }) {
+  if (!isSingleAssetPreviewNode(node)) {
+    return null;
+  }
+
+  const assetUrl = getNodeAssetUrl(node);
+  const previewText = getAssetPreviewText(node);
+  const isAudio = node.kind === "voice" || node.kind === "music";
+  const isVisual = node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
+
+  if (node.kind === "caption") {
+    return (
+      <div className="node-card-asset-preview node-card-caption-preview" aria-label="字幕预览">
+        <span
+          style={{
+            color: getString(node.data.color, "#ffffff")
+          }}
+        >
+          {previewText || "字幕文本"}
+        </span>
+      </div>
+    );
+  }
+
+  if (isVisual) {
+    return (
+      <div className="node-card-asset-preview node-card-visual-preview" aria-label="素材预览">
+        {assetUrl ? (
+          <object aria-label={getNodeTitle(node)} data={assetUrl} />
+        ) : (
+          <span>{previewText || "等待生成素材"}</span>
+        )}
+      </div>
+    );
+  }
+
+  if (isAudio) {
+    return (
+      <div className="node-card-asset-preview node-card-audio-preview" aria-label="音频预览">
+        <span />
+        <span />
+        <span />
+        <strong>{assetUrl ? "音频已生成" : previewText || "等待生成音频"}</strong>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function NodePreviewPanel({ node, previewSpec }: { node: CanvasNode; previewSpec: AstroVideoSpec }) {

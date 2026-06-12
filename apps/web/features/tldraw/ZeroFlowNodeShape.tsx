@@ -90,7 +90,9 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
 
   override component(shape: ZeroFlowNodeShape) {
     const props = shape.props;
-    const hasPreview = props.assetUrl.length > 0 && isVisualAsset(props.assetKind);
+    const hasVisualPreview = props.assetUrl.length > 0 && isVisualAsset(props.assetKind);
+    const hasCaptionPreview = props.kind === "caption" && props.description.length > 0;
+    const hasAudioPreview = props.kind === "voice" || props.kind === "music" || props.assetKind === "voice";
     const hasMeta =
       props.provider.length > 0 || props.cueCount > 0 || props.durationSec > 0 || props.refId.length > 0;
 
@@ -110,9 +112,18 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
         <strong className="zeroflow-tl-title">{props.title}</strong>
         {props.description ? <span className="zeroflow-tl-description">{props.description}</span> : null}
 
-        {hasPreview ? (
-          <div className="zeroflow-tl-preview">
-            <img alt="" draggable={false} src={props.assetUrl} />
+        {hasVisualPreview || hasCaptionPreview || hasAudioPreview ? (
+          <div className="zeroflow-tl-preview" data-asset-kind={props.assetKind || props.kind}>
+            {hasVisualPreview ? <img alt="" draggable={false} src={props.assetUrl} /> : null}
+            {hasCaptionPreview ? <span className="zeroflow-tl-caption-preview">{props.description}</span> : null}
+            {hasAudioPreview ? (
+              <div className="zeroflow-tl-audio-preview">
+                <span />
+                <span />
+                <span />
+                <strong>{props.assetUrl ? "音频已生成" : props.description || "音频配置"}</strong>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

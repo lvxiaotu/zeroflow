@@ -1,5 +1,5 @@
 import type { CanvasNode, JobType } from "@zeroflow/core";
-import { getSceneImageModel } from "./aiModels";
+import { getSceneImageModel, getSceneImageStyle } from "./aiModels";
 
 export type NodeJobRequest = {
   type: JobType;
@@ -21,18 +21,22 @@ export const sceneResourceJobIds: SceneResourceJobId[] = [
   "chart",
   "image",
   "d3",
-  "three",
-  "composition"
+  "three"
 ];
 
 const defaultChartBirthData = {
   birthDate: "1990-01-01",
   birthTime: "12:00",
   timezoneOffsetMinutes: 480,
+  timezone: "Asia/Shanghai",
   latitude: 39.9042,
   longitude: 116.4074,
   placeName: "Beijing",
   houseSystem: "equal",
+  zodiacMode: "tropical",
+  siderealAyanamsa: "lahiri",
+  planetSet: "modern",
+  nodeType: "mean",
   chartType: "natal",
   highlight: "ascendant"
 };
@@ -45,20 +49,16 @@ export function getSceneResourceJobRequest(
   const description = getString(node.data.description, title);
   const narration = getString(node.data.narration, description);
   const durationSec = getNumber(node.data.durationSec, 6);
-  const captionText = getString(node.data.caption, narration);
   const visualPrompt = getString(
     node.data.visualPrompt,
-    `simple educational astrology line drawing about ${description}`
+    `简洁的占星教学插画，主题是：${description}`
   );
 
   switch (resourceId) {
     case "caption":
       return {
         type: "align-captions",
-        input: {
-          text: captionText,
-          durationSec
-        }
+        input: {}
       };
     case "voice":
       return {
@@ -76,25 +76,32 @@ export function getSceneResourceJobRequest(
           label: title
         }
       };
-    case "image":
+    case "image": {
+      const imageModel = getSceneImageModel(node);
+      const imageStyle = getSceneImageStyle(node);
+
       return {
         type: "generate-image",
         input: {
           prompt: visualPrompt,
-          model: getSceneImageModel(node),
+          model: imageModel,
+          imageStyle,
           durationSec
         }
       };
+    }
     case "d3":
       return {
-        type: "create-d3-node",
+        type: "generate-d3",
         input: {
+          prompt: visualPrompt,
           title: `D3 ${title}`,
           description,
           narration,
           durationSec,
           diagram: "timeline",
-          visualPreset: "timeline"
+          visualPreset: "timeline",
+          model: getString(node.data.aiModel, "gpt-5.5")
         }
       };
     case "three":

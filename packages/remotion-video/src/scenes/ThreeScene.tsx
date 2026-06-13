@@ -56,47 +56,12 @@ export function ThreeScene({ scene }: { scene: ThreeSceneSpec }) {
         color: "#fbfaf4"
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: 76,
-          right: 76,
-          top: 108,
-          opacity: reveal,
-          transform: `translateY(${(1 - reveal) * 24}px)`
-        }}
-      >
-        <div
-          style={{
-            color: accentColor,
-            fontSize: 32,
-            fontWeight: 900,
-            letterSpacing: 0,
-            textTransform: "uppercase"
-          }}
-        >
-          Three.js contract: {scene.scene}
-        </div>
-        <h2
-          style={{
-            margin: "18px 0 0",
-            maxWidth: 800,
-            fontSize: 76,
-            fontWeight: 900,
-            lineHeight: 1.04,
-            letterSpacing: 0
-          }}
-        >
-          {scene.title}
-        </h2>
-      </div>
-
       <svg
         viewBox="0 0 1080 1260"
         style={{
           position: "absolute",
           left: 0,
-          top: 350,
+          top: 210,
           width: 1080,
           height: 1260,
           opacity: reveal

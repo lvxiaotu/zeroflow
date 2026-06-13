@@ -43,6 +43,21 @@ export async function GET(request: NextRequest) {
     const contentType = contentTypes[extension] ?? "application/octet-stream";
     const rangeHeader = request.headers.get("range");
 
+    if (extension === ".svg") {
+      const svg = normalizeSvgForImageDecode(await fs.readFile(assetPath, "utf8"));
+
+      return new NextResponse(svg, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "no-store",
+          "Content-Length": String(Buffer.byteLength(svg)),
+          "Content-Type": contentType,
+          "X-Zeroflow-Asset-Id": asset.id
+        }
+      });
+    }
+
     if (rangeHeader) {
       const range = parseByteRange(rangeHeader, stat.size);
 
@@ -101,6 +116,16 @@ export async function GET(request: NextRequest) {
 function isInsideDirectory(candidatePath: string, directoryPath: string) {
   const relative = path.relative(directoryPath, candidatePath);
   return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function normalizeSvgForImageDecode(svg: string) {
+  const openTagMatch = svg.match(/^<svg\b[^>]*>/i);
+
+  if (!openTagMatch || /\sxmlns=/.test(openTagMatch[0])) {
+    return svg;
+  }
+
+  return svg.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
 }
 
 function parseByteRange(rangeHeader: string, fileSize: number) {

@@ -24,7 +24,8 @@ const kindLabels: Record<CanvasNodeKind, string> = {
   caption: "字幕",
   voice: "配音",
   chart: "星盘",
-  image: "简笔画",
+  "chart-highlight": "星盘高亮",
+  image: "图像",
   d3: "D3 Diagram",
   three: "三维场景",
   music: "音乐",
@@ -42,7 +43,7 @@ const actionLabels: Partial<Record<CanvasNodeKind, string>> = {
   caption: "对齐字幕",
   voice: "生成配音",
   chart: "生成星盘",
-  image: "生成简笔画",
+  image: "生成图像",
   composition: "创建预览",
   preview: "渲染静帧"
 };
@@ -221,7 +222,10 @@ function nodeDisplaySize(
     };
   }
 
-  if (assetUrl && (node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three")) {
+  if (
+    assetUrl &&
+    (node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three")
+  ) {
     return {
       width: Math.max(node.size.width, 360),
       height: Math.max(node.size.height, 280)

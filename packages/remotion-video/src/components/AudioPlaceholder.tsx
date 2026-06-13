@@ -1,4 +1,4 @@
-import type { AstroVideoSpec } from "@zeroflow/core";
+import type { AstroVideoSpec, AudioTrack } from "@zeroflow/core";
 import { Audio } from "@remotion/media";
 import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 
@@ -32,8 +32,9 @@ export function AudioPlaceholder({ spec }: { spec: AstroVideoSpec }) {
     <>
       {audioTracks.map((track) => {
         const durationInFrames = track.durationSec
-          ? Math.max(1, Math.round(track.durationSec * fps))
+          ? Math.max(1, Math.ceil(track.durationSec * fps))
           : undefined;
+        const trimBeforeSec = getTrackTrimBeforeSec(track);
 
         return (
           <Audio
@@ -43,6 +44,7 @@ export function AudioPlaceholder({ spec }: { spec: AstroVideoSpec }) {
             name={track.kind}
             playbackRate={track.playbackRate ?? 1}
             src={track.assetUrl as string}
+            trimBefore={trimBeforeSec ? Math.round(trimBeforeSec * fps) : undefined}
             volume={track.volume}
           />
         );
@@ -65,4 +67,10 @@ export function AudioPlaceholder({ spec }: { spec: AstroVideoSpec }) {
       </div>
     </>
   );
+}
+
+function getTrackTrimBeforeSec(track: AudioTrack) {
+  const value = (track as { trimBeforeSec?: unknown }).trimBeforeSec;
+
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }

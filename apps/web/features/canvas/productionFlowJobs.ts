@@ -16,6 +16,24 @@ export function getCreateCompositionJobRequest(node: CanvasNode): ProductionFlow
   };
 }
 
+export function getCreatePreviewFlowJobRequest(node: CanvasNode): ProductionFlowJobRequest {
+  return {
+    type: "create-preview-flow",
+    input: {
+      sourceNodeKind: node.kind,
+      sceneId: getString(node.data.sceneId, node.refId ?? node.id),
+      sourceSceneNodeId: getString(node.data.sourceSceneNodeId, node.id)
+    }
+  };
+}
+
+export function getCreateProjectExportJobRequest(): ProductionFlowJobRequest {
+  return {
+    type: "create-project-export-node",
+    input: {}
+  };
+}
+
 export function getCreatePreviewJobRequest(node: CanvasNode): ProductionFlowJobRequest {
   return {
     type: "create-preview-node",

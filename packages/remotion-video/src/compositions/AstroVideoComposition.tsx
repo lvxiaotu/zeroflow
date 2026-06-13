@@ -8,6 +8,7 @@ import { SketchScene } from "../scenes/SketchScene";
 import { TextScene } from "../scenes/TextScene";
 import { ThreeScene } from "../scenes/ThreeScene";
 import { buildSceneTimeline } from "../timeline";
+import { RemoteVisualAsset } from "../components/RemoteVisualAsset";
 
 export function AstroVideoComposition({ spec }: { spec: AstroVideoSpec }) {
   const timeline = buildSceneTimeline(spec);
@@ -29,7 +30,11 @@ export function AstroVideoComposition({ spec }: { spec: AstroVideoSpec }) {
 }
 
 function SceneRenderer({ scene }: { scene: SceneSpec }) {
-  return <SceneLayoutFrame scene={scene}>{sceneContent(scene)}</SceneLayoutFrame>;
+  return (
+    <SceneLayoutFrame scene={scene} supplementary={<SupplementaryVisualLayers scene={scene} />}>
+      {sceneContent(scene)}
+    </SceneLayoutFrame>
+  );
 }
 
 function sceneContent(scene: SceneSpec) {
@@ -47,11 +52,24 @@ function sceneContent(scene: SceneSpec) {
   }
 }
 
-function SceneLayoutFrame({ children, scene }: { children: ReactNode; scene: SceneSpec }) {
+function SceneLayoutFrame({
+  children,
+  scene,
+  supplementary
+}: {
+  children: ReactNode;
+  scene: SceneSpec;
+  supplementary: ReactNode;
+}) {
   const layoutPreset = scene.layoutPreset ?? "single";
 
   if (layoutPreset === "single") {
-    return <>{children}</>;
+    return (
+      <>
+        {children}
+        {supplementary}
+      </>
+    );
   }
 
   if (layoutPreset === "split") {
@@ -63,56 +81,6 @@ function SceneLayoutFrame({ children, scene }: { children: ReactNode; scene: Sce
           color: "#fbfaf4"
         }}
       >
-        <div
-          style={{
-            position: "absolute",
-            left: 56,
-            top: 120,
-            bottom: 150,
-            zIndex: 2,
-            display: "flex",
-            width: 368,
-            flexDirection: "column",
-            justifyContent: "center"
-          }}
-        >
-          <div
-            style={{
-              color: "#e8c164",
-              fontSize: 30,
-              fontWeight: 900,
-              letterSpacing: 0,
-              lineHeight: 1.16,
-              textTransform: "uppercase"
-            }}
-          >
-            {scene.type}
-          </div>
-          <h2
-            style={{
-              margin: "24px 0 0",
-              color: "#fbfaf4",
-              fontSize: 58,
-              fontWeight: 900,
-              letterSpacing: 0,
-              lineHeight: 1.04
-            }}
-          >
-            {scene.title}
-          </h2>
-          <p
-            style={{
-              margin: "32px 0 0",
-              color: "rgba(251,250,244,0.78)",
-              fontSize: 29,
-              fontWeight: 700,
-              letterSpacing: 0,
-              lineHeight: 1.34
-            }}
-          >
-            {scene.narration}
-          </p>
-        </div>
         <div
           style={{
             position: "absolute",
@@ -130,6 +98,7 @@ function SceneLayoutFrame({ children, scene }: { children: ReactNode; scene: Sce
         >
           {children}
         </div>
+        {supplementary}
       </AbsoluteFill>
     );
   }
@@ -137,46 +106,152 @@ function SceneLayoutFrame({ children, scene }: { children: ReactNode; scene: Sce
   return (
     <AbsoluteFill style={{ overflow: "hidden" }}>
       {children}
-      <div
-        style={{
-          position: "absolute",
-          left: 72,
-          right: 72,
-          top: 94,
-          zIndex: 4,
-          border: "1px solid rgba(255,255,255,0.22)",
-          borderRadius: 8,
-          padding: "28px 34px",
-          background: "rgba(7, 20, 22, 0.64)",
-          boxShadow: "0 26px 90px rgba(0,0,0,0.28)",
-          color: "#fbfaf4"
-        }}
-      >
-        <div
-          style={{
-            color: "#e8c164",
-            fontSize: 26,
-            fontWeight: 900,
-            letterSpacing: 0,
-            lineHeight: 1.1
-          }}
-        >
-          {scene.title}
-        </div>
-        <div
-          style={{
-            marginTop: 12,
-            maxWidth: 820,
-            color: "rgba(251,250,244,0.84)",
-            fontSize: 30,
-            fontWeight: 700,
-            letterSpacing: 0,
-            lineHeight: 1.24
-          }}
-        >
-          {scene.narration}
-        </div>
-      </div>
+      {supplementary}
     </AbsoluteFill>
+  );
+}
+
+function SupplementaryVisualLayers({ scene }: { scene: SceneSpec }) {
+  const layers = scene.visualLayers ?? [];
+
+  if (layers.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      {layers.map((layer, index) => {
+        const layout = supplementaryLayerLayout(scene.layoutPreset ?? "single", index);
+
+        return (
+          <div key={`${layer.kind}-${index}`} style={layout}>
+            {layer.kind === "image" ? (
+              <SupplementaryImageLayer title={layer.title ?? scene.title} url={layer.assetUrl} />
+            ) : (
+              <SupplementaryChartLayer title={layer.title ?? scene.title} url={layer.assetUrl} />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function supplementaryLayerLayout(layoutPreset: string, index: number) {
+  if (layoutPreset === "split") {
+    return {
+      position: "absolute" as const,
+      left: 58,
+      bottom: 160 + index * 290,
+      zIndex: 6,
+      width: 360,
+      height: 250,
+      overflow: "hidden",
+      border: "2px solid rgba(251,250,244,0.34)",
+      borderRadius: 8,
+      boxShadow: "0 24px 76px rgba(0,0,0,0.28)"
+    };
+  }
+
+  return {
+    position: "absolute" as const,
+    right: 64,
+    top: 210 + index * 280,
+    zIndex: 6,
+    width: 328,
+    height: 328,
+    overflow: "hidden",
+    border: "2px solid rgba(251,250,244,0.34)",
+    borderRadius: 8,
+    boxShadow: "0 24px 76px rgba(0,0,0,0.28)"
+  };
+}
+
+function SupplementaryImageLayer({ title, url }: { title: string; url?: string }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        background: "#fbfaf4"
+      }}
+    >
+      {url ? (
+        <RemoteVisualAsset
+          alt={title}
+          src={url}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            width: "100%",
+            height: "100%",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#17352f",
+            fontSize: 28,
+            fontWeight: 900
+          }}
+        >
+          {title}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SupplementaryChartLayer({ title, url }: { title: string; url?: string }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        background: "linear-gradient(180deg, #f7f1df 0%, #d7e5d8 100%)"
+      }}
+    >
+      {url ? (
+        <RemoteVisualAsset
+          alt={title}
+          src={url}
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        />
+      ) : (
+        <svg viewBox="0 0 360 360" style={{ width: "100%", height: "100%" }}>
+          <circle cx="180" cy="180" r="138" fill="#fbfaf4" stroke="#c89437" strokeWidth="8" />
+          <circle cx="180" cy="180" r="108" fill="none" stroke="#24443e" strokeWidth="4" />
+          <circle cx="180" cy="180" r="58" fill="none" stroke="#24443e" strokeOpacity="0.45" strokeWidth="3" />
+          {Array.from({ length: 12 }, (_, tick) => {
+            const angle = (tick * 30 - 90) * (Math.PI / 180);
+            const outerX = 180 + Math.cos(angle) * 138;
+            const outerY = 180 + Math.sin(angle) * 138;
+            const innerX = 180 + Math.cos(angle) * 58;
+            const innerY = 180 + Math.sin(angle) * 58;
+
+            return (
+              <line
+                key={tick}
+                x1={outerX}
+                x2={innerX}
+                y1={outerY}
+                y2={innerY}
+                stroke="#24443e"
+                strokeOpacity="0.36"
+                strokeWidth="2"
+              />
+            );
+          })}
+          <line x1="42" x2="318" y1="180" y2="180" stroke="#e05f45" strokeLinecap="round" strokeWidth="7" />
+          <text x="180" y="324" fill="#24443e" fontSize="22" fontWeight="900" textAnchor="middle">
+            {title}
+          </text>
+        </svg>
+      )}
+    </div>
   );
 }

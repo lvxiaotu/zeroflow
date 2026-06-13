@@ -24,20 +24,33 @@ import {
   getExportScope,
   getRenderJobRequest
 } from "../render/renderJob";
-import { getCreateExportJobRequest, getCreatePreviewJobRequest } from "./productionFlowJobs";
+import {
+  getCreateExportJobRequest,
+  getCreateProjectExportJobRequest,
+  getCreatePreviewFlowJobRequest,
+  getCreatePreviewJobRequest
+} from "./productionFlowJobs";
 import {
   getSceneResourceJobRequest,
   sceneResourceJobIds,
   type NodeJobRequest,
   type SceneResourceJobId
 } from "./sceneResourceJobs";
-import { defaultCanvasDocument, defaultProjectId, nodeKindDescriptions, nodeKindLabels } from "./seed";
+import {
+  defaultCanvasDocument,
+  defaultProjectId,
+  nodeKindDescriptions,
+  nodeKindLabels
+} from "./seed";
 import {
   getAiModelOptionsForKind,
   getAiModelTarget,
   getNodeAiModel,
+  getNodeImageStyle,
   getSceneImageModel,
-  imageModelOptions
+  getSceneImageStyle,
+  imageModelOptions,
+  imageStyleOptions
 } from "./aiModels";
 import {
   getAiPromptDataKey,
@@ -47,11 +60,34 @@ import {
   getAiPromptValue
 } from "./aiNodeInputs";
 import {
-  getTargetDurationSec,
   getDefaultChapterCount,
+  getDefaultChapterSceneCount,
   getDefaultSceneCount,
+  getTargetDurationSec,
+  storyboardStructureThresholdSec,
   targetDurationOptions
 } from "./videoDurationOptions";
+import {
+  d3DataJsonStatus,
+  d3VisualPresetPatch,
+  d3VisualPresets,
+  formatVisualDataJson,
+  getD3VisualPreset,
+  type VisualPresetPatch
+} from "../visuals/visualPresets";
+import { D3VisualPreview } from "../visuals/VisualPreview";
+import {
+  ChartHighlightChildrenEditor,
+  ChartHighlightNodeEditor
+} from "./ChartHighlightChildrenEditor";
+import {
+  createChartHighlightChild,
+  getChartHighlightNodes,
+  getChartHighlightSourceChart,
+  removeChartHighlightChild,
+  updateChartHighlightChild,
+  type ChartHighlightDataPatch
+} from "./chartHighlightNodes";
 
 type SaveState = "saved" | "saving" | "unsaved" | "restored" | "error";
 type CanvasDragState =
@@ -77,19 +113,48 @@ const defaultChartBirthData = {
   birthDate: "1990-01-01",
   birthTime: "12:00",
   timezoneOffsetMinutes: 480,
+  timezone: "Asia/Shanghai",
   latitude: 39.9042,
   longitude: 116.4074,
   placeName: "Beijing",
   houseSystem: "equal",
+  zodiacMode: "tropical",
+  siderealAyanamsa: "lahiri",
+  planetSet: "modern",
+  nodeType: "mean",
   chartType: "natal",
   highlight: "ascendant"
 };
+
+const chartHouseSystemOptions = [
+  { value: "placidus", label: "Placidus" },
+  { value: "whole-sign", label: "Whole Sign" },
+  { value: "equal", label: "Equal" },
+  { value: "koch", label: "Koch" },
+  { value: "porphyry", label: "Porphyry" },
+  { value: "regiomontanus", label: "Regiomontanus" },
+  { value: "campanus", label: "Campanus" },
+  { value: "alcabitus", label: "Alcabitus" },
+  { value: "sripati", label: "Sripati" },
+  { value: "morinus", label: "Morinus" }
+];
+
+const chartAyanamsaOptions = [
+  { value: "lahiri", label: "Lahiri" },
+  { value: "raman", label: "Raman" },
+  { value: "fagan-bradley", label: "Fagan-Bradley" },
+  { value: "krishnamurti", label: "Krishnamurti" },
+  { value: "yukteshwar", label: "Yukteshwar" },
+  { value: "true-citra", label: "True Citra" },
+  { value: "true-revati", label: "True Revati" },
+  { value: "lahiri-icrc", label: "Lahiri ICRC" }
+];
 
 const sceneResourceLabels: Record<SceneResourceJobId, string> = {
   caption: "字幕",
   voice: "配音",
   chart: "星盘",
-  image: "简笔画",
+  image: "图像",
   d3: "D3 图表",
   three: "三维场景",
   composition: "画面合成"
@@ -116,8 +181,9 @@ export function CanvasStudio({
   const [expandedNodeId, setExpandedNodeId] = useState<string | undefined>();
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [statusText, setStatusText] = useState("画布已就绪");
-  const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+  const [runningNodeIds, setRunningNodeIds] = useState<Set<string>>(() => new Set());
   const canvasRef = useRef<CanvasDocument>(defaultCanvasDocument);
+  const saveCanvasPromiseRef = useRef<Promise<CanvasDocument | null> | null>(null);
   const dragStateRef = useRef<CanvasDragState | null>(null);
   canvasRef.current = canvasDoc;
 
@@ -171,6 +237,20 @@ export function CanvasStudio({
     () => canvasDoc.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [canvasDoc.nodes, selectedNodeId]
   );
+  const selectedChartHighlightNodes = useMemo(
+    () =>
+      selectedNode?.kind === "chart"
+        ? getChartHighlightNodes(canvasDoc, selectedNode)
+        : [],
+    [canvasDoc, selectedNode]
+  );
+  const selectedChartHighlightSourceNode = useMemo(
+    () =>
+      selectedNode?.kind === "chart-highlight"
+        ? getChartHighlightSourceChart(canvasDoc, selectedNode)
+        : undefined,
+    [canvasDoc, selectedNode]
+  );
   const previewSpec = useMemo(() => compileCanvasToAstroVideoSpec(canvasDoc), [canvasDoc]);
 
   function commitCanvas(updater: (current: CanvasDocument) => CanvasDocument) {
@@ -187,37 +267,70 @@ export function CanvasStudio({
     canvasToSave: CanvasDocument = canvasRef.current,
     messages: { saving?: string; saved?: string; failed?: string } = {}
   ) {
+    const canReuseSave =
+      canvasToSave === canvasRef.current &&
+      !messages.saving &&
+      !messages.saved &&
+      !messages.failed;
+
+    if (canReuseSave && saveCanvasPromiseRef.current) {
+      return saveCanvasPromiseRef.current;
+    }
+
     const currentCanvas = canvasToSave;
-    canvasRef.current = currentCanvas;
-    setSaveState("saving");
-    setStatusText(messages.saving ?? "正在保存画布");
-    localStorage.setItem(storageKey, JSON.stringify(currentCanvas));
+
+    const savePromise = (async () => {
+      canvasRef.current = currentCanvas;
+      setSaveState("saving");
+      setStatusText(messages.saving ?? "正在保存画布");
+      localStorage.setItem(storageKey, JSON.stringify(currentCanvas));
+
+      try {
+        const response = await fetch("/api/project/canvas", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, canvas: currentCanvas })
+        });
+
+        if (!response.ok) {
+          throw new Error("画布保存失败");
+        }
+
+        const payload = (await response.json()) as { project?: { canvas?: unknown } };
+        const parsed = canvasDocumentSchema.safeParse(payload.project?.canvas);
+        const savedCanvas = parsed.success ? parsed.data : currentCanvas;
+
+        setCanvasDoc(savedCanvas);
+        canvasRef.current = savedCanvas;
+        localStorage.setItem(storageKey, JSON.stringify(savedCanvas));
+        setSaveState("saved");
+        setStatusText(messages.saved ?? "画布已保存");
+        return savedCanvas;
+      } catch (error) {
+        if (isAbortError(error)) {
+          setSaveState("unsaved");
+          setStatusText("画布同步被取消，继续使用本地画布");
+          return canvasRef.current;
+        }
+
+        setSaveState("error");
+        setStatusText(messages.failed ?? "画布保存失败");
+        return null;
+      }
+    })();
+
+    if (!canReuseSave) {
+      return savePromise;
+    }
+
+    saveCanvasPromiseRef.current = savePromise;
 
     try {
-      const response = await fetch("/api/project/canvas", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, canvas: currentCanvas })
-      });
-
-      if (!response.ok) {
-        throw new Error("画布保存失败");
+      return await savePromise;
+    } finally {
+      if (saveCanvasPromiseRef.current === savePromise) {
+        saveCanvasPromiseRef.current = null;
       }
-
-      const payload = (await response.json()) as { project?: { canvas?: unknown } };
-      const parsed = canvasDocumentSchema.safeParse(payload.project?.canvas);
-      const savedCanvas = parsed.success ? parsed.data : currentCanvas;
-
-      setCanvasDoc(savedCanvas);
-      canvasRef.current = savedCanvas;
-      localStorage.setItem(storageKey, JSON.stringify(savedCanvas));
-      setSaveState("saved");
-      setStatusText(messages.saved ?? "画布已保存");
-      return savedCanvas;
-    } catch {
-      setSaveState("error");
-      setStatusText(messages.failed ?? "画布保存失败");
-      return null;
     }
   }
 
@@ -250,7 +363,9 @@ export function CanvasStudio({
     setCanvasDoc(parsed.data);
     canvasRef.current = parsed.data;
     localStorage.setItem(storageKey, JSON.stringify(parsed.data));
-    setSelectedNodeId(resolveInitialCanvasNodeId(parsed.data.nodes, selectNodeId ?? selectedNodeId));
+    setSelectedNodeId(
+      resolveInitialCanvasNodeId(parsed.data.nodes, selectNodeId ?? selectedNodeId)
+    );
     setExpandedNodeId(undefined);
     return parsed.data;
   }
@@ -276,6 +391,35 @@ export function CanvasStudio({
         ]
       };
     });
+  }
+
+  function addChartHighlightNode(chartNode: CanvasNode) {
+    commitCanvas((current) => createChartHighlightChild(current, chartNode).canvas);
+    setStatusText("已添加星盘高亮子节点");
+  }
+
+  function updateChartHighlightNode(nodeId: string, patch: ChartHighlightDataPatch) {
+    commitCanvas((current) => updateChartHighlightChild(current, nodeId, patch));
+    setStatusText("已更新星盘高亮子节点");
+  }
+
+  function deleteChartHighlightNode(nodeId: string) {
+    const node = canvasRef.current.nodes.find((item) => item.id === nodeId);
+
+    if (!node) {
+      setStatusText("这个高亮子节点不存在");
+      return;
+    }
+
+    const confirmed = window.confirm(`删除星盘高亮“${getNodeTitle(node)}”？`);
+    if (!confirmed) {
+      setStatusText("删除已取消");
+      return;
+    }
+
+    commitCanvas((current) => removeChartHighlightChild(current, nodeId));
+    setSelectedNodeId((current) => (current === nodeId ? undefined : current));
+    setStatusText("已删除星盘高亮子节点");
   }
 
   function updateNode(nodeId: string, updater: (node: CanvasNode) => CanvasNode) {
@@ -346,7 +490,7 @@ export function CanvasStudio({
     }
 
     setSaveState("saving");
-    setRunningNodeId(node.id);
+    setRunningNodeIds((current) => new Set(current).add(node.id));
     setStatusText(`正在运行：${getJobTypeLabel(draftJobRequest.type)}`);
 
     try {
@@ -380,15 +524,31 @@ export function CanvasStudio({
         job?: { output?: Record<string, unknown> };
       };
       const nextSelectedNodeId = getGeneratedNodeSelection(completedPayload.job?.output);
+      const completedStatus = getJobCompletionStatus(
+        draftJobRequest.type,
+        completedPayload.job?.output
+      );
 
       await loadProjectCanvas(nextSelectedNodeId);
       setSaveState("saved");
-      setStatusText(`${getJobTypeLabel(draftJobRequest.type)} 已完成`);
+      setStatusText(completedStatus);
     } catch (error) {
+      if (isAbortError(error)) {
+        setSaveState("unsaved");
+        setStatusText(`${getJobTypeLabel(draftJobRequest.type)} 请求已取消，请重试`);
+        return;
+      }
+
       setSaveState("error");
-      setStatusText(error instanceof Error ? error.message : `${getJobTypeLabel(draftJobRequest.type)} 失败`);
+      setStatusText(
+        error instanceof Error ? error.message : `${getJobTypeLabel(draftJobRequest.type)} 失败`
+      );
     } finally {
-      setRunningNodeId(null);
+      setRunningNodeIds((current) => {
+        const next = new Set(current);
+        next.delete(node.id);
+        return next;
+      });
     }
   }
 
@@ -552,7 +712,10 @@ export function CanvasStudio({
         </div>
 
         <nav className="nav-list" aria-label="Primary navigation">
-          <Link aria-current="page" href={`/studio/project-ascendant-intro?projectId=${encodeURIComponent(projectId)}`}>
+          <Link
+            aria-current="page"
+            href={`/studio/project-ascendant-intro?projectId=${encodeURIComponent(projectId)}`}
+          >
             工作台
           </Link>
           <Link href={`/tldraw?projectId=${encodeURIComponent(projectId)}`}>tldraw</Link>
@@ -570,11 +733,15 @@ export function CanvasStudio({
         <section className="node-palette" aria-label="节点面板">
           <strong>节点面板</strong>
           <div>
-            {((Object.keys(nodeKindLabels) as CanvasNodeKind[]).filter((kind) => kind !== "preview" && kind !== "export")).map((kind) => (
-              <button key={kind} type="button" onClick={() => addNode(kind)}>
-                {nodeKindLabels[kind]}
-              </button>
-            ))}
+            {(Object.keys(nodeKindLabels) as CanvasNodeKind[])
+              .filter(
+                (kind) => kind !== "preview" && kind !== "export" && kind !== "chart-highlight"
+              )
+              .map((kind) => (
+                <button key={kind} type="button" onClick={() => addNode(kind)}>
+                  {nodeKindLabels[kind]}
+                </button>
+              ))}
           </div>
         </section>
 
@@ -585,8 +752,27 @@ export function CanvasStudio({
           </header>
           <p>{statusText}</p>
           <div className="job-panel-actions">
-            <button type="button" onClick={saveCanvas}>保存</button>
-            <button type="button" onClick={resetCanvas}>重置</button>
+            <button type="button" onClick={saveCanvas}>
+              保存
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const anchorNodeId = selectedNodeId ?? canvasRef.current.nodes[0]?.id;
+
+                if (!anchorNodeId) {
+                  setStatusText("画布里还没有可用于创建导出的节点");
+                  return;
+                }
+
+                void runNodeJobRequest(anchorNodeId, getCreateProjectExportJobRequest());
+              }}
+            >
+              创建全片导出
+            </button>
+            <button type="button" onClick={resetCanvas}>
+              重置
+            </button>
           </div>
         </section>
       </aside>
@@ -598,7 +784,9 @@ export function CanvasStudio({
             <h1>视频工作台</h1>
           </div>
           <div className="topbar-actions">
-            <span className="save-state" data-state={saveState}>{saveStateLabels[saveState]}</span>
+            <span className="save-state" data-state={saveState}>
+              {saveStateLabels[saveState]}
+            </span>
           </div>
         </header>
 
@@ -675,13 +863,19 @@ export function CanvasStudio({
                   <h2>{getNodeTitle(node)}</h2>
                   <p>{getNodeDescription(node)}</p>
                   {node.kind === "script" && node.data.scriptText ? (
-                    <pre className="node-content-preview">{compactPreviewText(node.data.scriptText, 180)}</pre>
+                    <pre className="node-content-preview">
+                      {compactPreviewText(node.data.scriptText, 180)}
+                    </pre>
                   ) : null}
                   {node.kind === "scene" && node.data.narration ? (
-                    <pre className="node-content-preview">{compactPreviewText(node.data.narration, 180)}</pre>
+                    <pre className="node-content-preview">
+                      {compactPreviewText(node.data.narration, 180)}
+                    </pre>
                   ) : null}
                   {node.kind === "chapter" && node.data.summary ? (
-                    <pre className="node-content-preview">{compactPreviewText(node.data.summary, 150)}</pre>
+                    <pre className="node-content-preview">
+                      {compactPreviewText(node.data.summary, 150)}
+                    </pre>
                   ) : null}
                   {node.kind === "topic" && node.data.topic ? (
                     <p className="node-topic-line">{String(node.data.topic)}</p>
@@ -694,9 +888,18 @@ export function CanvasStudio({
                   </footer>
                   {isExpanded ? (
                     <InspectorPanel
+                      canvas={canvasDoc}
                       node={node}
+                      chartHighlightNodes={
+                        node.kind === "chart" ? getChartHighlightNodes(canvasDoc, node) : []
+                      }
+                      chartHighlightSourceNode={
+                        node.kind === "chart-highlight"
+                          ? getChartHighlightSourceChart(canvasDoc, node)
+                          : undefined
+                      }
                       previewSpec={previewSpec}
-                      running={runningNodeId === node.id}
+                      running={runningNodeIds.has(node.id)}
                       statusText={statusText}
                       variant="inline"
                       onNodeChange={(key, value) => {
@@ -708,6 +911,12 @@ export function CanvasStudio({
                           data: { ...currentNode.data, [key]: value }
                         }));
                       }}
+                      onDataPatch={(value) => {
+                        updateNode(node.id, (currentNode) => ({
+                          ...currentNode,
+                          data: { ...currentNode.data, ...value }
+                        }));
+                      }}
                       onDataReplace={(value) => {
                         updateNode(node.id, (currentNode) => ({
                           ...currentNode,
@@ -717,6 +926,13 @@ export function CanvasStudio({
                       onRunNode={(nodeId) => void runNodeAction(nodeId)}
                       onRunNodeJob={(nodeId, request) => void runNodeJobRequest(nodeId, request)}
                       onDeleteNode={deleteNode}
+                      onChartHighlightAdd={addChartHighlightNode}
+                      onChartHighlightChange={updateChartHighlightNode}
+                      onChartHighlightDelete={deleteChartHighlightNode}
+                      onChartHighlightSelect={(nodeId) => {
+                        setSelectedNodeId(nodeId);
+                        setExpandedNodeId(nodeId);
+                      }}
                     />
                   ) : null}
                 </article>
@@ -727,9 +943,12 @@ export function CanvasStudio({
       </section>
 
       <InspectorPanel
+        canvas={canvasDoc}
         node={selectedNode}
+        chartHighlightNodes={selectedChartHighlightNodes}
+        chartHighlightSourceNode={selectedChartHighlightSourceNode}
         previewSpec={previewSpec}
-        running={runningNodeId === selectedNode?.id}
+        running={selectedNode ? runningNodeIds.has(selectedNode.id) : false}
         statusText={statusText}
         onNodeChange={(key, value) => {
           if (!selectedNode) return;
@@ -742,6 +961,13 @@ export function CanvasStudio({
             data: { ...node.data, [key]: value }
           }));
         }}
+        onDataPatch={(value) => {
+          if (!selectedNode) return;
+          updateNode(selectedNode.id, (node) => ({
+            ...node,
+            data: { ...node.data, ...value }
+          }));
+        }}
         onDataReplace={(value) => {
           if (!selectedNode) return;
           updateNode(selectedNode.id, (node) => ({
@@ -752,35 +978,58 @@ export function CanvasStudio({
         onRunNode={(nodeId) => void runNodeAction(nodeId)}
         onRunNodeJob={(nodeId, request) => void runNodeJobRequest(nodeId, request)}
         onDeleteNode={deleteNode}
+        onChartHighlightAdd={addChartHighlightNode}
+        onChartHighlightChange={updateChartHighlightNode}
+        onChartHighlightDelete={deleteChartHighlightNode}
+        onChartHighlightSelect={(nodeId) => {
+          setSelectedNodeId(nodeId);
+          setExpandedNodeId(nodeId);
+        }}
       />
     </main>
   );
 }
 
 function InspectorPanel({
+  canvas,
   node,
+  chartHighlightNodes,
+  chartHighlightSourceNode,
   previewSpec,
   running,
   statusText,
   onNodeChange,
   onDataChange,
+  onDataPatch,
   onDataReplace,
   onRunNode,
   onRunNodeJob,
   onDeleteNode,
+  onChartHighlightAdd,
+  onChartHighlightChange,
+  onChartHighlightDelete,
+  onChartHighlightSelect,
   variant = "side"
 }: {
+  canvas: CanvasDocument;
   node: CanvasNode | null;
+  chartHighlightNodes: CanvasNode[];
+  chartHighlightSourceNode?: CanvasNode;
   previewSpec: AstroVideoSpec;
   running: boolean;
   statusText: string;
   variant?: "side" | "inline";
   onNodeChange: <TKey extends keyof CanvasNode>(key: TKey, value: CanvasNode[TKey]) => void;
   onDataChange: (key: string, value: unknown) => void;
+  onDataPatch: (value: VisualPresetPatch) => void;
   onDataReplace: (value: CanvasNode["data"]) => void;
   onRunNode: (nodeId: string) => void;
   onRunNodeJob: (nodeId: string, request: NodeJobRequest) => void;
   onDeleteNode: (nodeId: string) => void;
+  onChartHighlightAdd: (chartNode: CanvasNode) => void;
+  onChartHighlightChange: (nodeId: string, patch: ChartHighlightDataPatch) => void;
+  onChartHighlightDelete: (nodeId: string) => void;
+  onChartHighlightSelect: (nodeId: string) => void;
 }) {
   const [rawData, setRawData] = useState(node ? JSON.stringify(node.data, null, 2) : "{}");
   const isInline = variant === "inline";
@@ -807,8 +1056,13 @@ function InspectorPanel({
 
   const nodeJobRequest = getNodeJobRequest(node);
   const assetUrl = getNodeAssetUrl(node);
+  const visualRenderMode = getString(node.data.renderMode, assetUrl ? "asset" : "contract");
   const aiModelTarget = getAiModelTarget(node.kind);
   const aiPromptDataKey = getAiPromptDataKey(node.kind);
+  const d3Diagram = getString(node.data.diagram, "timeline");
+  const d3Preset = getD3VisualPreset(getString(node.data.visualPreset, d3Diagram));
+  const d3JsonStatus = d3DataJsonStatus(d3Diagram, getString(node.data.dataJson, ""));
+  const chartPipeline = node.kind === "chart" ? getChartPipelineSummary(node) : null;
   const content = (
     <>
       <header>
@@ -843,10 +1097,17 @@ function InspectorPanel({
               {running ? "运行中..." : "手写文案"}
             </button>
           ) : null}
-          <div
-            className="job-provider-notice"
-            data-risk="local-or-mock"
-          >
+          {node.kind === "d3" ? (
+            <button
+              data-risk="local-or-mock"
+              disabled={running}
+              type="button"
+              onClick={() => onRunNodeJob(node.id, { type: "export-visual-asset", input: {} })}
+            >
+              {running ? "运行中..." : "导出视觉素材"}
+            </button>
+          ) : null}
+          <div className="job-provider-notice" data-risk="local-or-mock">
             {statusText}
           </div>
         </section>
@@ -871,6 +1132,14 @@ function InspectorPanel({
               );
             })}
           </div>
+          <button
+            data-risk="local-or-mock"
+            disabled={running}
+            type="button"
+            onClick={() => onRunNodeJob(node.id, getCreatePreviewFlowJobRequest(node))}
+          >
+            {running ? "运行中..." : "创建当前分镜预览"}
+          </button>
         </section>
       ) : null}
 
@@ -937,6 +1206,24 @@ function InspectorPanel({
         </label>
       ) : null}
 
+      {node.kind === "image" ? (
+        <>
+          <label>
+            风格
+            <select
+              value={getNodeImageStyle(node)}
+              onChange={(event) => onDataChange("imageStyle", event.currentTarget.value)}
+            >
+              {imageStyleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : null}
+
       {node.kind === "topic" ? (
         <label>
           文案风格
@@ -964,7 +1251,9 @@ function InspectorPanel({
           <select
             name="targetDurationSec"
             value={getTargetDurationSec(node.data.targetDurationSec)}
-            onChange={(event) => onDataChange("targetDurationSec", Number(event.currentTarget.value))}
+            onChange={(event) =>
+              onDataChange("targetDurationSec", Number(event.currentTarget.value))
+            }
           >
             {targetDurationOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -997,12 +1286,15 @@ function InspectorPanel({
         <label>
           分镜数量
           <input
-            max={12}
+            max={60}
             min={1}
             type="number"
-            value={getNumber(node.data.sceneCount, 5)}
+            value={getNumber(
+              node.data.sceneCount,
+              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
             onChange={(event) =>
-              onDataChange("sceneCount", clampNumber(Number(event.currentTarget.value), 1, 12))
+              onDataChange("sceneCount", clampNumber(Number(event.currentTarget.value), 1, 60))
             }
           />
         </label>
@@ -1017,7 +1309,7 @@ function InspectorPanel({
             type="number"
             value={getNumber(
               node.data.sceneCount,
-              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+              getDefaultChapterSceneCount(getTargetDurationSec(node.data.targetDurationSec))
             )}
             onChange={(event) =>
               onDataChange("sceneCount", clampNumber(Number(event.currentTarget.value), 1, 24))
@@ -1057,12 +1349,25 @@ function InspectorPanel({
             />
           </label>
           <label>
-            插画模型
+            AI 模型
             <select
               value={getSceneImageModel(node)}
               onChange={(event) => onDataChange("imageModel", event.currentTarget.value)}
             >
               {imageModelOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            风格
+            <select
+              value={getSceneImageStyle(node)}
+              onChange={(event) => onDataChange("imageStyle", event.currentTarget.value)}
+            >
+              {imageStyleOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -1084,9 +1389,22 @@ function InspectorPanel({
                 <option value="auto">自动</option>
                 <option value="text">文字</option>
                 <option value="chart">星盘</option>
-                <option value="image">简笔画</option>
+                <option value="image">图像</option>
                 <option value="d3">D3 图表</option>
                 <option value="three">三维场景</option>
+              </select>
+            </label>
+            <label>
+              附加视觉
+              <select
+                value={getString(node.data.secondaryVisualKind, "none")}
+                onChange={(event) =>
+                  onDataChange("secondaryVisualKind", event.currentTarget.value)
+                }
+              >
+                <option value="none">无</option>
+                <option value="chart">星盘</option>
+                <option value="image">图像</option>
               </select>
             </label>
             <label>
@@ -1226,38 +1544,261 @@ function InspectorPanel({
       ) : null}
 
       {node.kind === "chart" ? (
-        <div className="inspector-grid">
+        <>
+          <section className="chart-result">
+            <strong>生成线路</strong>
+            <span>展示：{chartPipeline?.renderer ?? "AstroChart SVG"}</span>
+            <span>计算：{chartPipeline?.calculator ?? "Swiss Ephemeris"}</span>
+            {chartPipeline?.ephemeris ? <span>星历：{chartPipeline.ephemeris}</span> : null}
+            {chartPipeline?.zodiac ? <span>黄道：{chartPipeline.zodiac}</span> : null}
+            {chartPipeline?.houses ? <span>宫制：{chartPipeline.houses}</span> : null}
+            {chartPipeline?.timezone ? <span>时区：{chartPipeline.timezone}</span> : null}
+            {chartPipeline?.source ? <span>数据：{chartPipeline.source}</span> : null}
+          </section>
+          <ChartHighlightChildrenEditor
+            chartNode={node}
+            highlights={chartHighlightNodes}
+            onAdd={onChartHighlightAdd}
+            onDelete={onChartHighlightDelete}
+            onSelect={onChartHighlightSelect}
+          />
+          <div className="inspector-grid">
+            <label>
+              出生日期
+              <input
+                type="date"
+                value={getString(node.data.birthDate, defaultChartBirthData.birthDate)}
+                onChange={(event) => onDataChange("birthDate", event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              出生时间
+              <input
+                type="time"
+                value={getString(node.data.birthTime, defaultChartBirthData.birthTime)}
+                onChange={(event) => onDataChange("birthTime", event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              IANA 时区
+              <input
+                value={getString(node.data.timezone, defaultChartBirthData.timezone)}
+                onChange={(event) => onDataChange("timezone", event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              UTC 偏移分钟
+              <input
+                type="number"
+                value={getNumber(
+                  node.data.timezoneOffsetMinutes,
+                  defaultChartBirthData.timezoneOffsetMinutes
+                )}
+                onChange={(event) =>
+                  onDataChange("timezoneOffsetMinutes", Number(event.currentTarget.value))
+                }
+              />
+            </label>
+            <label>
+              地点
+              <input
+                value={getString(node.data.placeName, defaultChartBirthData.placeName)}
+                onChange={(event) => onDataChange("placeName", event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              纬度
+              <input
+                max={89.999}
+                min={-89.999}
+                step={0.0001}
+                type="number"
+                value={getNumber(node.data.latitude, defaultChartBirthData.latitude)}
+                onChange={(event) => onDataChange("latitude", Number(event.currentTarget.value))}
+              />
+            </label>
+            <label>
+              经度
+              <input
+                max={180}
+                min={-180}
+                step={0.0001}
+                type="number"
+                value={getNumber(node.data.longitude, defaultChartBirthData.longitude)}
+                onChange={(event) => onDataChange("longitude", Number(event.currentTarget.value))}
+              />
+            </label>
+            <label>
+              宫位系统
+              <select
+                value={getString(node.data.houseSystem, defaultChartBirthData.houseSystem)}
+                onChange={(event) => onDataChange("houseSystem", event.currentTarget.value)}
+              >
+                {chartHouseSystemOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              黄道系统
+              <select
+                value={getString(node.data.zodiacMode, defaultChartBirthData.zodiacMode)}
+                onChange={(event) => onDataChange("zodiacMode", event.currentTarget.value)}
+              >
+                <option value="tropical">Tropical</option>
+                <option value="sidereal">Sidereal</option>
+              </select>
+            </label>
+            <label>
+              Ayanamsa
+              <select
+                value={getString(node.data.siderealAyanamsa, defaultChartBirthData.siderealAyanamsa)}
+                onChange={(event) => onDataChange("siderealAyanamsa", event.currentTarget.value)}
+              >
+                {chartAyanamsaOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              行星集
+              <select
+                value={getString(node.data.planetSet, defaultChartBirthData.planetSet)}
+                onChange={(event) => onDataChange("planetSet", event.currentTarget.value)}
+              >
+                <option value="classical">Classical</option>
+                <option value="modern">Modern</option>
+                <option value="extended">Extended</option>
+              </select>
+            </label>
+            <label>
+              月交点
+              <select
+                value={getString(node.data.nodeType, defaultChartBirthData.nodeType)}
+                onChange={(event) => onDataChange("nodeType", event.currentTarget.value)}
+              >
+                <option value="mean">Mean Node</option>
+                <option value="true">True Node</option>
+                <option value="both">Both</option>
+              </select>
+            </label>
+            <label>
+              高亮目标
+              <input
+                value={getString(node.data.highlight, defaultChartBirthData.highlight)}
+                onChange={(event) => onDataChange("highlight", event.currentTarget.value)}
+              />
+            </label>
+          </div>
+        </>
+      ) : null}
+
+      {node.kind === "chart-highlight" ? (
+        <ChartHighlightNodeEditor
+          chartNode={chartHighlightSourceNode ?? node}
+          highlight={node}
+          onChange={onChartHighlightChange}
+        />
+      ) : null}
+
+      {node.kind === "d3" ? (
+        <>
           <label>
-            出生日期
-            <input
-              type="date"
-              value={getString(node.data.birthDate, defaultChartBirthData.birthDate)}
-              onChange={(event) => onDataChange("birthDate", event.currentTarget.value)}
+            预设
+            <select
+              value={d3Preset.id}
+              onChange={(event) => onDataPatch(d3VisualPresetPatch(event.currentTarget.value))}
+            >
+              {d3VisualPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="inspector-grid">
+            <label>
+              图表类型
+              <select
+                value={d3Diagram}
+                onChange={(event) => onDataChange("diagram", event.currentTarget.value)}
+              >
+                <option value="timeline">时间线</option>
+                <option value="relationship">关系图</option>
+                <option value="tree">树状图</option>
+                <option value="distribution">分布条形图</option>
+              </select>
+            </label>
+            <label>
+              渲染模式
+              <select
+                value={visualRenderMode}
+                onChange={(event) => onDataChange("renderMode", event.currentTarget.value)}
+              >
+                <option value="contract">动态合约</option>
+                <option value="asset">导出素材</option>
+              </select>
+            </label>
+            <label>
+              时长
+              <input
+                max={30}
+                min={1}
+                type="number"
+                value={getNumber(node.data.durationSec, d3Preset.durationSec)}
+                onChange={(event) =>
+                  onDataChange(
+                    "durationSec",
+                    clampNumber(Number(event.currentTarget.value), 1, 30)
+                  )
+                }
+              />
+            </label>
+          </div>
+          <label>
+            旁白
+            <textarea
+              rows={3}
+              value={getString(node.data.narration, "")}
+              onChange={(event) => onDataChange("narration", event.currentTarget.value)}
             />
           </label>
           <label>
-            出生时间
-            <input
-              type="time"
-              value={getString(node.data.birthTime, defaultChartBirthData.birthTime)}
-              onChange={(event) => onDataChange("birthTime", event.currentTarget.value)}
+            数据 JSON
+            <textarea
+              rows={6}
+              value={getString(node.data.dataJson, "")}
+              onChange={(event) => onDataChange("dataJson", event.currentTarget.value)}
             />
           </label>
-          <label>
-            地点
-            <input
-              value={getString(node.data.placeName, defaultChartBirthData.placeName)}
-              onChange={(event) => onDataChange("placeName", event.currentTarget.value)}
-            />
-          </label>
-          <label>
-            高亮目标
-            <input
-              value={getString(node.data.highlight, defaultChartBirthData.highlight)}
-              onChange={(event) => onDataChange("highlight", event.currentTarget.value)}
-            />
-          </label>
-        </div>
+          <div className="visual-json-tools">
+            <span className="visual-json-status" data-state={d3JsonStatus.state}>
+              {d3JsonStatus.label}
+            </span>
+            <button
+              disabled={!d3JsonStatus.canFormat}
+              type="button"
+              onClick={() => {
+                const formatted = formatVisualDataJson(getString(node.data.dataJson, ""));
+
+                if (formatted.ok) {
+                  onDataChange("dataJson", formatted.value);
+                }
+              }}
+            >
+              格式化
+            </button>
+          </div>
+          <D3VisualPreview
+            dataJson={getString(node.data.dataJson, "")}
+            diagram={d3Diagram}
+            title={getString(node.data.title, d3Preset.title)}
+          />
+        </>
       ) : null}
 
       {node.kind === "preview" ? (
@@ -1356,7 +1897,11 @@ function InspectorPanel({
             <>
               <label>
                 原始数据
-                <textarea rows={10} value={rawData} onChange={(event) => setRawData(event.target.value)} />
+                <textarea
+                  rows={10}
+                  value={rawData}
+                  onChange={(event) => setRawData(event.target.value)}
+                />
               </label>
               <button
                 type="button"
@@ -1378,7 +1923,7 @@ function InspectorPanel({
             </>
           ) : null}
 
-          <NodePreviewPanel node={node} previewSpec={previewSpec} />
+          <NodePreviewPanel canvas={canvas} node={node} previewSpec={previewSpec} />
         </>
       ) : null}
     </>
@@ -1412,7 +1957,8 @@ function NodeCardAssetPreview({ node }: { node: CanvasNode }) {
   const assetUrl = getNodeAssetUrl(node);
   const previewText = getAssetPreviewText(node);
   const isAudio = node.kind === "voice" || node.kind === "music";
-  const isVisual = node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
+  const isVisual =
+    node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
 
   if (node.kind === "caption") {
     return (
@@ -1441,26 +1987,121 @@ function NodeCardAssetPreview({ node }: { node: CanvasNode }) {
   }
 
   if (isAudio) {
-    return (
-      <div className="node-card-asset-preview node-card-audio-preview" aria-label="音频预览">
-        <span />
-        <span />
-        <span />
-        <strong>{assetUrl ? "音频已生成" : previewText || "等待生成音频"}</strong>
-      </div>
-    );
+    return <NodeCardAudioPreview assetUrl={assetUrl} previewText={previewText} />;
   }
 
   return null;
 }
 
-function NodeCardScenePreview({
-  canvas,
-  node
+function NodeCardAudioPreview({
+  assetUrl,
+  previewText
 }: {
-  canvas: CanvasDocument;
-  node: CanvasNode;
+  assetUrl: string;
+  previewText: string;
 }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [status, setStatus] = useState(assetUrl ? "准备播放" : previewText || "等待生成音频");
+
+  useEffect(() => {
+    setPlaying(false);
+    setStatus(assetUrl ? "准备播放" : previewText || "等待生成音频");
+  }, [assetUrl, previewText]);
+
+  const updateStatusFromAudio = () => {
+    const audio = audioRef.current;
+
+    if (!audio) {
+      return;
+    }
+
+    const current = formatDurationSec(audio.currentTime);
+    const duration = Number.isFinite(audio.duration) && audio.duration > 0
+      ? formatDurationSec(audio.duration)
+      : "";
+
+    setStatus(duration ? `${current} / ${duration}` : current);
+  };
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+
+    if (!audio || !assetUrl) {
+      return;
+    }
+
+    if (audio.paused) {
+      try {
+        await audio.play();
+        setPlaying(true);
+        updateStatusFromAudio();
+      } catch {
+        setPlaying(false);
+        setStatus("浏览器阻止播放，请再点一次");
+      }
+      return;
+    }
+
+    audio.pause();
+    setPlaying(false);
+    updateStatusFromAudio();
+  };
+
+  return (
+    <div
+      className="node-card-asset-preview node-card-audio-preview"
+      aria-label="音频预览"
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="node-card-audio-bars" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="node-card-audio-content">
+        <strong>{assetUrl ? "音频已生成" : previewText || "等待生成音频"}</strong>
+        {assetUrl ? (
+          <div className="node-card-audio-controls">
+            <button
+              aria-label={playing ? "暂停音频" : "播放音频"}
+              className="node-card-audio-play"
+              type="button"
+              onClick={() => void togglePlayback()}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {playing ? "暂停" : "播放"}
+            </button>
+            <span className="node-card-audio-status">{status}</span>
+            <audio
+              ref={audioRef}
+              preload="metadata"
+              src={assetUrl}
+              onEnded={() => {
+                setPlaying(false);
+                updateStatusFromAudio();
+              }}
+              onError={() => {
+                setPlaying(false);
+                setStatus("音频加载失败");
+              }}
+              onLoadedMetadata={updateStatusFromAudio}
+              onPause={() => setPlaying(false)}
+              onPlay={() => setPlaying(true)}
+              onTimeUpdate={updateStatusFromAudio}
+            />
+          </div>
+        ) : (
+          <span className="node-card-audio-status">{previewText || "暂无音频文件"}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NodeCardScenePreview({ canvas, node }: { canvas: CanvasDocument; node: CanvasNode }) {
   const preview = getSceneCardPreview(canvas, node);
 
   if (!preview) {
@@ -1488,12 +2129,26 @@ function NodeCardScenePreview({
   );
 }
 
-function NodePreviewPanel({ node, previewSpec }: { node: CanvasNode; previewSpec: AstroVideoSpec }) {
-  if (isSingleAssetPreviewNode(node)) {
-    return <AssetPreviewPanel assetUrl={getNodeAssetUrl(node)} node={node} />;
+function NodePreviewPanel({
+  canvas,
+  node,
+  previewSpec
+}: {
+  canvas: CanvasDocument;
+  node: CanvasNode;
+  previewSpec: AstroVideoSpec;
+}) {
+  const assetUrl = getNodeAssetUrl(node);
+
+  if (node.kind === "export" && assetUrl) {
+    return <ExportAssetPreviewPanel assetUrl={assetUrl} node={node} />;
   }
 
-  const scopedSpec = getScopedVideoPreviewSpec(node, previewSpec);
+  if (isSingleAssetPreviewNode(node)) {
+    return <AssetPreviewPanel assetUrl={assetUrl} node={node} />;
+  }
+
+  const scopedSpec = getScopedVideoPreviewSpec(canvas, node, previewSpec);
 
   if (scopedSpec) {
     return <VideoPreviewPanel label={getVideoPreviewLabel(node)} previewSpec={scopedSpec} />;
@@ -1513,10 +2168,42 @@ function NodePreviewPanel({ node, previewSpec }: { node: CanvasNode; previewSpec
   );
 }
 
+function ExportAssetPreviewPanel({ assetUrl, node }: { assetUrl: string; node: CanvasNode }) {
+  const assetPath = getString(node.data.assetPath, "");
+  const renderedAt = getString(node.data.renderedAt, "");
+
+  return (
+    <section className="asset-preview-panel">
+      <header>
+        <strong>导出视频</strong>
+        <span>{renderedAt ? `已渲染 · ${new Date(renderedAt).toLocaleString("zh-CN")}` : "MP4 成片"}</span>
+      </header>
+      <div className="export-video-preview">
+        <video controls src={assetUrl} />
+      </div>
+      <div className="export-asset-actions">
+        <a href={assetUrl} download>
+          下载视频
+        </a>
+        <a href={assetUrl} target="_blank" rel="noreferrer">
+          新窗口打开
+        </a>
+      </div>
+      {assetPath ? (
+        <div className="export-asset-path">
+          <strong>本地位置</strong>
+          <code>{assetPath}</code>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AssetPreviewPanel({ assetUrl, node }: { assetUrl: string; node: CanvasNode }) {
   const previewText = getAssetPreviewText(node);
   const isAudio = node.kind === "voice" || node.kind === "music";
-  const isVisual = node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
+  const isVisual =
+    node.kind === "chart" || node.kind === "image" || node.kind === "d3" || node.kind === "three";
 
   return (
     <section className="asset-preview-panel">
@@ -1542,7 +2229,11 @@ function AssetPreviewPanel({ assetUrl, node }: { assetUrl: string; node: CanvasN
 
       {isAudio ? (
         <div className="audio-asset-preview">
-          {assetUrl ? <audio controls src={assetUrl} /> : <span>暂无音频文件，仅显示配音配置。</span>}
+          {assetUrl ? (
+            <audio controls src={assetUrl} />
+          ) : (
+            <span>暂无音频文件，仅显示配音配置。</span>
+          )}
         </div>
       ) : null}
 
@@ -1581,7 +2272,10 @@ function VideoPreviewPanel({
           {durationSec > 0 ? ` · ${formatDurationSec(durationSec)}` : ""}
         </span>
       </header>
-      <div className="video-preview-frame" style={{ aspectRatio: `${size.width} / ${size.height}` }}>
+      <div
+        className="video-preview-frame"
+        style={{ aspectRatio: `${size.width} / ${size.height}` }}
+      >
         {durationInFrames > 0 ? (
           <Player
             acknowledgeRemotionLicense
@@ -1606,33 +2300,137 @@ function isSingleAssetPreviewNode(node: CanvasNode) {
   return ["caption", "voice", "music", "chart", "image", "d3", "three"].includes(node.kind);
 }
 
-function getScopedVideoPreviewSpec(node: CanvasNode, previewSpec: AstroVideoSpec): AstroVideoSpec | null {
-  if (node.kind === "storyboard" || node.kind === "preview" || node.kind === "export") {
+function getScopedVideoPreviewSpec(
+  canvas: CanvasDocument,
+  node: CanvasNode,
+  previewSpec: AstroVideoSpec
+): AstroVideoSpec | null {
+  if (node.kind === "storyboard") {
     return previewSpec;
   }
 
-  if (node.kind === "scene" || node.kind === "composition") {
-    const sceneId =
-      node.kind === "scene"
-        ? (node.refId ?? node.id)
-        : getString(node.data.sceneId, getString(node.data.sourceSceneRefId, ""));
-    const scene = previewSpec.scenes.find((item) => item.id === sceneId);
-
-    if (!scene) {
-      return null;
-    }
-
-    return {
-      ...previewSpec,
-      title: scene.title,
-      scenes: [scene],
-      audio: {
-        tracks: []
-      }
-    };
+  if (node.kind === "export" && getString(node.data.exportScope, "") === "full") {
+    return previewSpec;
   }
 
-  return null;
+  const sceneId = getScopedPreviewSceneId(canvas, node);
+
+  if (!sceneId) {
+    return null;
+  }
+
+  const scene = previewSpec.scenes.find((item) => item.id === sceneId);
+
+  if (!scene) {
+    return null;
+  }
+
+  return {
+    ...previewSpec,
+    title: scene.title,
+    scenes: [scene],
+    audio: {
+      tracks: getScopedAudioTracksForScene(previewSpec, sceneId)
+    }
+  };
+}
+
+function getScopedPreviewSceneId(canvas: CanvasDocument, node: CanvasNode): string | undefined {
+  if (node.kind === "scene") {
+    return node.refId ?? node.id;
+  }
+
+  if (node.kind === "composition") {
+    return getSceneIdForComposition(canvas, node);
+  }
+
+  if (node.kind === "preview") {
+    const compositionNode = findCanvasNodeById(
+      canvas,
+      getString(node.data.sourceCompositionNodeId, "")
+    );
+
+    return (
+      getString(node.data.sceneId, "") ||
+      getString(node.data.sourceSceneRefId, "") ||
+      getSceneIdForComposition(canvas, compositionNode)
+    );
+  }
+
+  if (node.kind === "export") {
+    const previewNode = findCanvasNodeById(canvas, getString(node.data.sourcePreviewNodeId, ""));
+    return previewNode ? getScopedPreviewSceneId(canvas, previewNode) : undefined;
+  }
+
+  return undefined;
+}
+
+function getSceneIdForComposition(
+  canvas: CanvasDocument,
+  node: CanvasNode | undefined
+): string | undefined {
+  if (!node) {
+    return undefined;
+  }
+
+  const directSceneId = getString(node.data.sceneId, getString(node.data.sourceSceneRefId, ""));
+
+  if (directSceneId) {
+    return directSceneId;
+  }
+
+  const sceneNode = findCanvasNodeById(canvas, getString(node.data.sourceSceneNodeId, ""));
+  return sceneNode?.kind === "scene" ? (sceneNode.refId ?? sceneNode.id) : undefined;
+}
+
+function findCanvasNodeById(canvas: CanvasDocument, nodeId: string) {
+  return nodeId ? canvas.nodes.find((item) => item.id === nodeId) : undefined;
+}
+
+function getScopedAudioTracksForScene(previewSpec: AstroVideoSpec, sceneId: string) {
+  let cursor = 0;
+  let sceneStartSec: number | undefined;
+  const scene = previewSpec.scenes.find((item) => {
+    const matched = item.id === sceneId;
+
+    if (matched) {
+      sceneStartSec = cursor;
+    }
+
+    cursor += item.durationSec;
+    return matched;
+  });
+
+  if (!scene || sceneStartSec === undefined) {
+    return [];
+  }
+
+  const startSec = sceneStartSec;
+  const sceneEndSec = startSec + scene.durationSec;
+
+  return (previewSpec.audio?.tracks ?? [])
+    .filter((track) => {
+      const trackStartSec = track.startSec ?? 0;
+      const trackEndSec = trackStartSec + (track.durationSec ?? scene.durationSec);
+
+      return trackEndSec > startSec && trackStartSec < sceneEndSec;
+    })
+    .map((track) => {
+      const trackStartSec = track.startSec ?? 0;
+      const trackEndSec = trackStartSec + (track.durationSec ?? scene.durationSec);
+      const overlapStartSec = Math.max(startSec, trackStartSec);
+      const overlapEndSec = Math.min(sceneEndSec, trackEndSec);
+      const scopedStartSec = Math.max(0, trackStartSec - startSec);
+      const durationSec = Math.max(0.1, overlapEndSec - overlapStartSec);
+      const trimBeforeSec = Math.max(0, startSec - trackStartSec);
+
+      return {
+        ...track,
+        startSec: scopedStartSec,
+        durationSec,
+        trimBeforeSec
+      };
+    });
 }
 
 function getVideoPreviewLabel(node: CanvasNode) {
@@ -1644,12 +2442,24 @@ function getVideoPreviewLabel(node: CanvasNode) {
     return "画面合成预览";
   }
 
+  if (node.kind === "preview") {
+    return "当前分镜预览";
+  }
+
+  if (node.kind === "export" && getString(node.data.exportScope, "") !== "full") {
+    return "当前分镜导出预览";
+  }
+
   return "整片预览";
 }
 
 function getAssetPreviewText(node: CanvasNode) {
   const caption = recordData(node.data.caption);
-  const cues = Array.isArray(node.data.cues) ? node.data.cues : Array.isArray(caption?.cues) ? caption.cues : [];
+  const cues = Array.isArray(node.data.cues)
+    ? node.data.cues
+    : Array.isArray(caption?.cues)
+      ? caption.cues
+      : [];
   const firstCue = cues.find((cue) => recordData(cue));
   const cueText = firstCue ? getString(recordData(firstCue)?.text, "") : "";
 
@@ -1814,13 +2624,16 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   if (node.kind === "script" || node.kind === "storyboard") {
     const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
 
-    if (node.kind === "script" && targetDurationSec > 60) {
+    if (node.kind === "script" && targetDurationSec > storyboardStructureThresholdSec) {
       return {
         type: "create-structure-node",
         input: {
           scriptText: getAiPromptValue(node),
           targetDurationSec,
-          chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+          chapterCount: getNumber(
+            node.data.chapterCount,
+            getDefaultChapterCount(targetDurationSec)
+          ),
           model: getNodeAiModel(node)
         }
       };
@@ -1830,7 +2643,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       type: "generate-storyboard",
       input: {
         scriptText: getAiPromptValue(node),
-        sceneCount: getNumber(node.data.sceneCount, 5),
+        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
         model: getNodeAiModel(node),
         targetDurationSec
       }
@@ -1859,18 +2672,22 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         scriptText: getAiPromptValue(node),
         targetDurationSec,
-        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
+        sceneCount: getNumber(node.data.sceneCount, getDefaultChapterSceneCount(targetDurationSec)),
         model: getNodeAiModel(node)
       }
     };
   }
 
   if (node.kind === "image") {
+    const imageModel = getNodeAiModel(node);
+    const imageStyle = getNodeImageStyle(node);
+
     return {
       type: "generate-image",
       input: {
-        prompt: getAiPromptValue(node) || "simple educational astrology line drawing",
-        model: getNodeAiModel(node)
+        prompt: getAiPromptValue(node) || "简洁的占星教学插画，清晰表达核心概念，适合短视频画面",
+        model: imageModel,
+        imageStyle
       }
     };
   }
@@ -1883,7 +2700,22 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return { type: "generate-chart", input: getChartJobInput(node) };
   }
 
-  if (node.kind === "d3" || node.kind === "three") {
+  if (node.kind === "d3") {
+    return {
+      type: "generate-d3",
+      input: {
+        prompt: getAiPromptValue(node) || getNodeDescription(node),
+        title: getNodeTitle(node),
+        description: getNodeDescription(node),
+        narration: getString(node.data.narration, getNodeDescription(node)),
+        diagram: getString(node.data.diagram, "timeline"),
+        durationSec: getNumber(node.data.durationSec, 8),
+        model: getNodeAiModel(node)
+      }
+    };
+  }
+
+  if (node.kind === "three") {
     return { type: "export-visual-asset", input: {} };
   }
 
@@ -1910,13 +2742,75 @@ function getChartJobInput(node: CanvasNode) {
       node.data.timezoneOffsetMinutes,
       defaultChartBirthData.timezoneOffsetMinutes
     ),
+    timezone: getString(node.data.timezone, defaultChartBirthData.timezone),
     latitude: getNumber(node.data.latitude, defaultChartBirthData.latitude),
     longitude: getNumber(node.data.longitude, defaultChartBirthData.longitude),
     placeName: getString(node.data.placeName, defaultChartBirthData.placeName),
     houseSystem: getString(node.data.houseSystem, defaultChartBirthData.houseSystem),
+    zodiacMode: getString(node.data.zodiacMode, defaultChartBirthData.zodiacMode),
+    siderealAyanamsa: getString(
+      node.data.siderealAyanamsa,
+      defaultChartBirthData.siderealAyanamsa
+    ),
+    planetSet: getString(node.data.planetSet, defaultChartBirthData.planetSet),
+    nodeType: getString(node.data.nodeType, defaultChartBirthData.nodeType),
     chartType: getString(node.data.chartType, defaultChartBirthData.chartType),
     highlight: getString(node.data.highlight, defaultChartBirthData.highlight)
   };
+}
+
+function getChartPipelineSummary(node: CanvasNode) {
+  const calculation = recordData(node.data.calculation);
+  const renderer = getString(node.data.renderer, "AstroChart SVG");
+  const calculator = getString(
+    node.data.calculator,
+    getString(calculation?.engine, "Swiss Ephemeris")
+  );
+  const ephemeris = getChartEphemerisLabel(getString(calculation?.ephemeris, ""));
+  const zodiac = getChartZodiacLabel(calculation);
+  const houses = getString(calculation?.houseSystem, "");
+  const timezone = getString(calculation?.timezone, "");
+  const source = getChartSourceLabel(getString(node.data.source, ""));
+
+  return {
+    renderer,
+    calculator,
+    ephemeris,
+    zodiac,
+    houses,
+    timezone,
+    source
+  };
+}
+
+function getChartZodiacLabel(calculation: Record<string, unknown> | undefined) {
+  const zodiacMode = getString(calculation?.zodiacMode, "");
+  const siderealAyanamsa = getString(calculation?.siderealAyanamsa, "");
+
+  if (zodiacMode === "sidereal") {
+    return siderealAyanamsa ? `Sidereal / ${siderealAyanamsa}` : "Sidereal";
+  }
+
+  return zodiacMode === "tropical" ? "Tropical" : "";
+}
+
+function getChartEphemerisLabel(ephemeris: string) {
+  const labels: Record<string, string> = {
+    "swiss-files": "Swiss Ephemeris files",
+    moshier: "Moshier fallback"
+  };
+
+  return labels[ephemeris] ?? ephemeris;
+}
+
+function getChartSourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    "provided-data": "外部星盘数据",
+    "calculated-birth": "出生资料计算",
+    sample: "示例数据"
+  };
+
+  return labels[source] ?? source;
 }
 
 function getNodeRunLabel(node: CanvasNode) {
@@ -1938,8 +2832,9 @@ function getNodeRunLabel(node: CanvasNode) {
     case "chart":
       return "生成星盘";
     case "image":
-      return "生成简笔画";
+      return "生成图像";
     case "d3":
+      return "生成 D3 图表";
     case "three":
       return "导出视觉素材";
     case "composition":
@@ -1961,15 +2856,18 @@ function getJobTypeLabel(jobType: string) {
     "generate-chapters": "生成章节",
     "expand-chapter-scenes": "展开章节分镜",
     "generate-storyboard": "生成分镜",
-    "generate-image": "生成简笔画",
+    "generate-image": "生成图像",
+    "generate-d3": "生成 D3 图表",
     "generate-tts": "生成配音",
     "generate-chart": "生成星盘",
     "export-visual-asset": "导出视觉素材",
     "align-captions": "对齐字幕",
     "render-preview": "渲染预览",
     "render-video": "渲染视频",
+    "create-preview-flow": "创建当前分镜预览",
     "create-preview-node": "创建预览",
-    "create-export-node": "创建导出"
+    "create-export-node": "创建导出",
+    "create-project-export-node": "创建全片导出"
   };
 
   return labels[jobType] ?? jobType;
@@ -2008,7 +2906,7 @@ function translateLegacyNodeTitle(title: string) {
     Caption: "字幕",
     Voice: "配音",
     Chart: "星盘",
-    Image: "简笔画",
+    Image: "图像",
     "D3 Diagram": "D3 图表",
     "Three Scene": "三维场景",
     "Three 场景": "三维场景",
@@ -2100,6 +2998,26 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
   return undefined;
 }
 
+function getJobCompletionStatus(jobType: string, output: Record<string, unknown> | undefined) {
+  const label = getJobTypeLabel(jobType);
+  const assetPath = getString(output?.assetPath, "");
+
+  if (jobType === "render-video" && assetPath) {
+    return `${label} 已完成：${assetPath}`;
+  }
+
+  return `${label} 已完成`;
+}
+
+function isAbortError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 function getNodeAssetUrl(node: CanvasNode) {
   const caption = recordData(node.data.caption);
 
@@ -2125,7 +3043,9 @@ function getSceneCardPreview(canvas: CanvasDocument, node: CanvasNode) {
 
   const visualNode = sceneCardVisualKinds
     .map((kind) => findSceneCardResourceNode(canvas, node, kind))
-    .find((resourceNode): resourceNode is CanvasNode => Boolean(resourceNode && getNodeAssetUrl(resourceNode)));
+    .find((resourceNode): resourceNode is CanvasNode =>
+      Boolean(resourceNode && getNodeAssetUrl(resourceNode))
+    );
   const captionNode = findSceneCardResourceNode(canvas, node, "caption");
   const assetUrl = visualNode ? getNodeAssetUrl(visualNode) : "";
   const caption = captionNode ? getAssetPreviewText(captionNode) : "";
@@ -2203,8 +3123,3 @@ function getEdgeEndPoint(node: CanvasNode) {
     y: node.position.y + node.size.height / 2
   };
 }
-
-
-
-
-

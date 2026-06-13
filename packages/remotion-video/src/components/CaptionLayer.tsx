@@ -33,6 +33,7 @@ export function CaptionLayer({ caption }: { caption?: CaptionLayout }) {
         top: `${caption.yPercent}%`,
         left: 82,
         right: 82,
+        zIndex: 30,
         transform: `translateY(${translateY}%)`,
         opacity: caption.animation === "none" ? 1 : reveal,
         display: "flex",

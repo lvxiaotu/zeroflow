@@ -9,7 +9,7 @@ export type SceneTimelineItem = {
 };
 
 export function secondsToFrames(seconds: number, fps: number) {
-  return Math.max(1, Math.round(seconds * fps));
+  return Math.max(1, Math.ceil(seconds * fps));
 }
 
 export function buildSceneTimeline(spec: AstroVideoSpec): SceneTimelineItem[] {

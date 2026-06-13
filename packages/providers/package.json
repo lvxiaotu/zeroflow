@@ -16,12 +16,14 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
+    "@types/tz-lookup": "^6.1.2",
     "typescript": "^5.8.3"
   },
   "dependencies": {
     "@astrodraw/astrochart": "^3.0.2",
     "@zeroflow/core": "workspace:*",
-    "astronomy-engine": "^2.1.19",
-    "happy-dom": "^20.10.2"
+    "happy-dom": "^20.10.2",
+    "sweph": "2.10.3-5",
+    "tz-lookup": "^6.1.25"
   }
 }

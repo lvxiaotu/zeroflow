@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AbortErrorSuppressor } from "@/features/system/AbortErrorSuppressor";
 import "tldraw/tldraw.css";
 import "./globals.css";
 
@@ -10,7 +11,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        <AbortErrorSuppressor />
+        {children}
+      </body>
     </html>
   );
 }

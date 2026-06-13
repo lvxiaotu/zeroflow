@@ -40,9 +40,9 @@ export function createIndexTtsProvider(): TtsProvider {
         "--output",
         input.outputPath,
         "--chunk-max",
-        String(input.chunkMax ?? 220),
+        String(input.chunkMax ?? 80),
         "--pause-ms",
-        String(input.pauseMs ?? 180),
+        String(input.pauseMs ?? 260),
         "--resume"
       ];
 

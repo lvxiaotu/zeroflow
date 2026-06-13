@@ -21,7 +21,8 @@ export async function POST(request: NextRequest) {
     provider: chart.provider,
     assetPath: chart.data.assetPath,
     usedSampleData: chart.data.usedSampleData,
-    source: chart.data.source
+    source: chart.data.source,
+    renderer: "AstroChart SVG"
   });
 
   const birthChartOutputPath = path.join(getDataDir(), "provider-checks", "astrochart-birth.svg");
@@ -32,10 +33,15 @@ export async function POST(request: NextRequest) {
       date: "1990-01-01",
       time: "12:00",
       timezoneOffsetMinutes: 480,
+      timezone: "Asia/Shanghai",
       latitude: 39.9042,
       longitude: 116.4074,
       placeName: "Beijing",
-      houseSystem: "equal"
+      houseSystem: "equal",
+      zodiacMode: "tropical",
+      siderealAyanamsa: "lahiri",
+      planetSet: "modern",
+      nodeType: "mean"
     }
   });
   checks.push({
@@ -45,6 +51,8 @@ export async function POST(request: NextRequest) {
     assetPath: birthChart.data.assetPath,
     usedSampleData: birthChart.data.usedSampleData,
     source: birthChart.data.source,
+    renderer: "AstroChart SVG",
+    calculator: birthChart.data.calculation?.engine,
     ascendant: birthChart.data.calculation?.ascendant,
     positions: birthChart.data.positions?.length
   });
@@ -80,7 +88,7 @@ export async function POST(request: NextRequest) {
   if (mode === "live" && hasEnv("YUNWU_API_KEY")) {
     const imageOutputPath = path.join(getDataDir(), "provider-checks", "yunwu.png");
     const image = await providers.image.generateImage({
-      prompt: "simple black line drawing, ascendant sign rising over horizon, educational astrology",
+      prompt: "简洁黑色线稿：上升星座从东方地平线升起，用于占星教学",
       outputPath: imageOutputPath,
       size: "1024x1024"
     });

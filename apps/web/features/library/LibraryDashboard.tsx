@@ -159,7 +159,7 @@ export function LibraryDashboard() {
         />
         <ProviderBadge
           details={health.find((item) => item.id === "astrochart")?.details}
-          label="AstroChart SVG"
+          label="AstroChart + Swiss Ephemeris"
           enabled={providers?.astrochart}
           status={health.find((item) => item.id === "astrochart")?.status}
         />

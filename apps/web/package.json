@@ -24,13 +24,16 @@
     "next": "^15.3.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "sweph": "2.10.3-5",
     "three": "^0.184.0",
-    "tldraw": "^5.1.0"
+    "tldraw": "^5.1.0",
+    "tz-lookup": "^6.1.25"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@types/three": "^0.184.1"
+    "@types/three": "^0.184.1",
+    "@types/tz-lookup": "^6.1.2"
   }
 }

@@ -12,7 +12,8 @@ export const nodeKindLabels: Record<CanvasNodeKind, string> = {
   caption: "字幕",
   voice: "配音",
   chart: "星盘",
-  image: "简笔画",
+  "chart-highlight": "星盘高亮",
+  image: "图像",
   d3: "D3 图表",
   three: "三维场景",
   music: "音乐",
@@ -31,7 +32,8 @@ export const nodeKindDescriptions: Record<CanvasNodeKind, string> = {
   caption: "字幕时间轴和样式",
   voice: "配音参数",
   chart: "星盘与高亮目标",
-  image: "简笔画提示词和素材",
+  "chart-highlight": "星盘中的符号、连线、宫位等讲解高亮",
+  image: "图像提示词和素材",
   d3: "用于动画教学图解的结构化数据",
   three: "三维空间场景配置",
   music: "BGM 和声音设计",
@@ -167,10 +169,15 @@ export const demoCanvasDocument: CanvasDocument = {
         birthDate: "1990-01-01",
         birthTime: "12:00",
         timezoneOffsetMinutes: 480,
+        timezone: "Asia/Shanghai",
         latitude: 39.9042,
         longitude: 116.4074,
         placeName: "Beijing",
-        houseSystem: "equal"
+        houseSystem: "equal",
+        zodiacMode: "tropical",
+        siderealAyanamsa: "lahiri",
+        planetSet: "modern",
+        nodeType: "mean"
       }
     },
     {
@@ -181,9 +188,9 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 270, height: 160 },
       status: "ready",
       data: {
-        title: "简笔画",
+        title: "图像",
         description: "一个人推开门走进星空房间",
-        prompt: "simple line drawing, a person opening a door into a starry room"
+        prompt: "简洁线稿插画：一个人推开门走进星空房间，画面温暖清晰"
       }
     },
     {
@@ -199,7 +206,7 @@ export const demoCanvasDocument: CanvasDocument = {
         durationSec: 8,
         diagram: "timeline",
         dataJson:
-          "{\"events\":[{\"label\":\"Birth moment\",\"value\":0},{\"label\":\"Eastern horizon\",\"value\":1},{\"label\":\"Rising sign\",\"value\":2},{\"label\":\"First impression\",\"value\":3}]}"
+          '{"events":[{"label":"Birth moment","value":0},{"label":"Eastern horizon","value":1},{"label":"Rising sign","value":2},{"label":"First impression","value":3}]}'
       }
     },
     {
@@ -218,7 +225,7 @@ export const demoCanvasDocument: CanvasDocument = {
         speed: 0.72,
         accentColor: "#e8c164",
         dataJson:
-          "{\"preset\":\"orbit\",\"camera\":\"portrait-orbit\",\"speed\":0.72,\"accentColor\":\"#e8c164\",\"focus\":\"Ascendant\"}"
+          '{"preset":"orbit","camera":"portrait-orbit","speed":0.72,"accentColor":"#e8c164","focus":"Ascendant"}'
       }
     },
     {

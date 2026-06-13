@@ -1,6 +1,16 @@
 import type { CanvasDocument, CanvasNode } from "../schema/canvas";
 import type { AstroVideoSpec } from "../schema/project";
+import {
+  astroChartCalculationSchema,
+  astroChartHighlightSchema,
+  astroChartHouseSchema,
+  astroChartPositionSchema
+} from "../schema/scenes";
 import type {
+  AstroChartHighlight,
+  AstroChartCalculation,
+  AstroChartHouse,
+  AstroChartPosition,
   AudioTrack,
   CaptionCue,
   CaptionLayout,
@@ -9,6 +19,7 @@ import type {
   SceneSpec,
   ThreeSceneSpec,
   Transition,
+  VisualLayer,
   VisualRenderMode,
   VoiceSettings
 } from "../schema/scenes";
@@ -36,10 +47,31 @@ const defaultVoice: VoiceSettings = {
 const d3DiagramKinds = ["timeline", "relationship", "tree", "distribution"] as const;
 const threeSceneKinds = ["orbit", "zodiac-space", "planet-focus"] as const;
 const compositionVisualKinds = ["auto", "text", "chart", "image", "d3", "three"] as const;
+const compositionSecondaryVisualKinds = ["none", "chart", "image"] as const;
 const layoutPresets = ["single", "split", "overlay"] as const;
 const transitions = ["cut", "fade", "wipe", "zoom"] as const;
+const chartAxisHighlightIds = ["ascendant", "descendant", "mc", "ic"] as const;
+const chartPlanetHighlightIds = [
+  "sun",
+  "moon",
+  "mercury",
+  "venus",
+  "mars",
+  "jupiter",
+  "saturn",
+  "uranus",
+  "neptune",
+  "pluto",
+  "chiron",
+  "north-node",
+  "south-node",
+  "lilith"
+] as const;
+const sceneVoiceTailPaddingSec = 0.9;
+const defaultAscendantHighlightLabel = "\u4e0a\u5347\u70b9";
 
 type CompositionVisualKind = (typeof compositionVisualKinds)[number];
+type CompositionSecondaryVisualKind = (typeof compositionSecondaryVisualKinds)[number];
 
 export function compileCanvasToAstroVideoSpec(
   canvas: CanvasDocument,
@@ -83,7 +115,9 @@ export function getSpecDurationFrames(spec: AstroVideoSpec) {
 }
 
 type SceneResourceNodes = {
+  captionNode?: CanvasNode;
   chartNode?: CanvasNode;
+  chartHighlightNodes?: CanvasNode[];
   imageNode?: CanvasNode;
   d3Node?: CanvasNode;
   threeNode?: CanvasNode;
@@ -111,7 +145,7 @@ function compileSceneNodes(
     return sceneFromNode(
       node,
       index,
-      captionForScene(canvas, node, baseCaption, resources.compositionNode),
+      captionForScene(baseCaption, node, resources),
       sceneVoice,
       resources
     );
@@ -121,7 +155,7 @@ function compileSceneNodes(
     const generatedScenes: SceneSpec[] = [...scenes];
 
     if (chartNode && !generatedScenes.some((scene) => scene.type === "astro-chart")) {
-      generatedScenes.splice(1, 0, chartSceneFromNode(chartNode, baseCaption, voice));
+      generatedScenes.splice(1, 0, chartSceneFromNode(chartNode, baseCaption, voice, canvas));
     }
 
     if (imageNode && !generatedScenes.some((scene) => scene.type === "sketch")) {
@@ -156,16 +190,15 @@ function sceneFromNode(
   const id = node.refId ?? `scene-${index + 1}`;
   const title = stringData(node, "title", `分镜 ${index + 1}`);
   const narration = stringData(node, "narration", stringData(node, "description", title));
-  const durationSec = numberData(resources.compositionNode, "durationSec", numberData(node, "durationSec", 6));
+  const durationSec = sceneDurationSec(node, resources);
   const layoutPreset = layoutPresetData(resources.compositionNode);
   const explicitSceneType = stringData(node, "sceneType", undefined);
-  const inferredSceneType = inferSceneTypeFromResources(resources);
   const compositionSceneType = sceneTypeFromComposition(resources);
   const sceneType =
     compositionSceneType ??
-    (explicitSceneType && explicitSceneType !== "text"
-      ? explicitSceneType
-      : (inferredSceneType ?? explicitSceneType ?? "text"));
+    inferAutoSceneType(node, resources, explicitSceneType);
+  const visualLayers = visualLayersFromComposition(node, resources, sceneType);
+  const visualLayerData = visualLayers.length > 0 ? { visualLayers } : {};
 
   if (sceneType === "astro-chart") {
     return {
@@ -176,17 +209,25 @@ function sceneFromNode(
       durationSec,
       transition: transitionData(resources.compositionNode, "zoom"),
       layoutPreset,
+      ...visualLayerData,
       chartId: stringData(chartNode, "refId", stringData(node, "chartId", "chart-generated")),
       chartAssetId: stringData(chartNode, "assetId", stringData(node, "assetId", undefined)),
       chartAssetUrl: stringData(chartNode, "assetUrl", stringData(node, "assetUrl", undefined)),
+      chartSvg: chartSvgFromNode(chartNode ?? node),
       chartSource: stringData(chartNode, "source", stringData(node, "source", undefined)),
-      highlights: [
-        {
-          kind: "zodiac",
-          id: stringData(chartNode, "highlight", stringData(node, "highlight", "ascendant")),
-          label: stringData(node, "highlightLabel", "上升点")
-        }
-      ],
+      positions: chartPositionsFromNode(chartNode ?? node),
+      houses: chartHousesFromNode(chartNode ?? node),
+      calculation: chartCalculationFromNode(chartNode ?? node),
+      highlights: chartHighlightsFromNodes(
+        [node, chartNode],
+        stringData(chartNode, "highlight", stringData(node, "highlight", "ascendant")),
+        stringData(
+          chartNode,
+          "highlightLabel",
+          stringData(node, "highlightLabel", defaultAscendantHighlightLabel)
+        ),
+        resources.chartHighlightNodes
+      ),
       caption,
       voice
     };
@@ -201,7 +242,12 @@ function sceneFromNode(
       durationSec,
       transition: transitionData(resources.compositionNode, "wipe"),
       layoutPreset,
-      prompt: stringData(imageNode, "prompt", stringData(node, "visualPrompt", "simple educational line drawing")),
+      ...visualLayerData,
+      prompt: stringData(
+        imageNode,
+        "prompt",
+        stringData(node, "visualPrompt", "简洁的占星教学插画，清晰表达核心概念")
+      ),
       assetId: stringData(imageNode, "assetId", stringData(node, "assetId", undefined)),
       assetUrl: stringData(imageNode, "assetUrl", stringData(node, "assetUrl", undefined)),
       assetSource: stringData(imageNode, "provider", stringData(node, "source", undefined)),
@@ -215,7 +261,8 @@ function sceneFromNode(
       ...d3DiagramSceneFromNode(d3Node ?? node, caption, voice),
       durationSec,
       transition: transitionData(resources.compositionNode, "wipe"),
-      layoutPreset
+      layoutPreset,
+      ...visualLayerData
     };
   }
 
@@ -224,7 +271,8 @@ function sceneFromNode(
       ...threeSceneFromNode(threeNode ?? node, caption, voice),
       durationSec,
       transition: transitionData(resources.compositionNode, "zoom"),
-      layoutPreset
+      layoutPreset,
+      ...visualLayerData
     };
   }
 
@@ -236,11 +284,50 @@ function sceneFromNode(
     durationSec,
     transition: transitionData(resources.compositionNode, "fade"),
     layoutPreset,
+    ...visualLayerData,
     headline: stringData(node, "description", title),
     body: stringData(node, "body", undefined),
     caption,
     voice
   };
+}
+
+function sceneDurationSec(sceneNode: CanvasNode, resources: SceneResourceNodes) {
+  const voiceDurationSec = sceneVoiceDurationSec(resources);
+  const voiceSafeDurationSec =
+    voiceDurationSec === undefined ? 0 : voiceDurationSec + sceneVoiceTailPaddingSec;
+  const durationSec = Math.max(
+    numberData(sceneNode, "durationSec", 6),
+    numberData(resources.compositionNode, "durationSec", 0),
+    numberData(resources.captionNode, "durationSec", 0),
+    captionCueEndSec(resources.captionNode),
+    voiceSafeDurationSec
+  );
+
+  return Math.round(Math.max(0.5, durationSec) * 100) / 100;
+}
+
+function sceneVoiceDurationSec(resources: SceneResourceNodes) {
+  const voiceNode = resources.voiceNode;
+
+  if (!voiceNode || !booleanData(resources.compositionNode, "includeVoice", true)) {
+    return undefined;
+  }
+
+  const durationSec = Math.max(
+    numberData(voiceNode, "audioDurationSec", 0),
+    numberData(voiceNode, "durationSec", 0)
+  );
+  const playbackRate = Math.max(0.1, numberData(voiceNode, "speed", defaultVoice.speed));
+
+  return durationSec > 0 ? durationSec / playbackRate : undefined;
+}
+
+function captionCueEndSec(node?: CanvasNode) {
+  return captionCuesFromNode(node).reduce(
+    (max, cue) => Math.max(max, cue.startSec + cue.durationSec),
+    0
+  );
 }
 
 function d3DiagramSceneFromNode(
@@ -343,7 +430,7 @@ function sketchSceneFromNode(
     ),
     durationSec: numberData(imageNode, "durationSec", 10),
     transition: "wipe",
-    prompt: stringData(imageNode, "prompt", "simple educational astrology line drawing"),
+    prompt: stringData(imageNode, "prompt", "简洁的占星教学插画，清晰表达核心概念"),
     assetId,
     assetUrl: stringData(imageNode, "assetUrl", undefined),
     assetSource: stringData(imageNode, "provider", undefined),
@@ -358,7 +445,8 @@ function sketchSceneFromNode(
 function chartSceneFromNode(
   chartNode: CanvasNode,
   baseCaption: CaptionLayout,
-  voice: VoiceSettings
+  voice: VoiceSettings,
+  canvas?: CanvasDocument
 ): SceneSpec {
   const chartId = stringData(chartNode, "refId", "chart-generated");
   const title = stringData(chartNode, "title", "星盘重点");
@@ -378,14 +466,17 @@ function chartSceneFromNode(
     chartId,
     chartAssetId: stringData(chartNode, "assetId", undefined),
     chartAssetUrl: stringData(chartNode, "assetUrl", undefined),
+    chartSvg: chartSvgFromNode(chartNode),
     chartSource: stringData(chartNode, "source", undefined),
-    highlights: [
-      {
-        kind: "zodiac",
-        id: stringData(chartNode, "highlight", "ascendant"),
-        label: stringData(chartNode, "highlightLabel", "上升点")
-      }
-    ],
+    positions: chartPositionsFromNode(chartNode),
+    houses: chartHousesFromNode(chartNode),
+    calculation: chartCalculationFromNode(chartNode),
+    highlights: chartHighlightsFromNodes(
+      [chartNode],
+      stringData(chartNode, "highlight", "ascendant"),
+      stringData(chartNode, "highlightLabel", defaultAscendantHighlightLabel),
+      canvas ? findChartHighlightNodes(canvas, chartNode) : []
+    ),
     caption: {
       ...baseCaption,
       text: description
@@ -440,14 +531,17 @@ function compileFallbackScenes(
       chartId: stringData(chartNode, "refId", "chart-ascendant-demo"),
       chartAssetId: stringData(chartNode, "assetId", undefined),
       chartAssetUrl: stringData(chartNode, "assetUrl", undefined),
+      chartSvg: chartSvgFromNode(chartNode),
       chartSource: stringData(chartNode, "source", undefined),
-      highlights: [
-        {
-          kind: "zodiac",
-          id: stringData(chartNode, "highlight", "ascendant"),
-          label: "上升点"
-        }
-      ],
+      positions: chartPositionsFromNode(chartNode),
+      houses: chartHousesFromNode(chartNode),
+      calculation: chartCalculationFromNode(chartNode),
+      highlights: chartHighlightsFromNodes(
+        [chartNode],
+        stringData(chartNode, "highlight", "ascendant"),
+        stringData(chartNode, "highlightLabel", defaultAscendantHighlightLabel),
+        findChartHighlightNodes(canvas, chartNode)
+      ),
       caption: {
         ...caption,
         text: stringData(chartNode, "description", "上升点高亮")
@@ -464,7 +558,7 @@ function compileFallbackScenes(
       prompt: stringData(
         imageNode,
         "prompt",
-        "simple line drawing, a person opening a door into a starry room"
+        "简洁线稿插画：一个人推开门走进星空房间，画面温暖清晰"
       ),
       assetId: stringData(imageNode, "assetId", imageNode?.refId),
       assetUrl: stringData(imageNode, "assetUrl", undefined),
@@ -489,23 +583,18 @@ function compileFallbackScenes(
 }
 
 function captionForScene(
-  canvas: CanvasDocument,
-  sceneNode: CanvasNode,
   baseCaption: CaptionLayout,
-  compositionNode?: CanvasNode
+  sceneNode: CanvasNode,
+  resources: SceneResourceNodes
 ): CaptionLayout {
+  const { captionNode, compositionNode } = resources;
+
   if (!booleanData(compositionNode, "includeCaption", true)) {
     return {
       ...baseCaption,
       cues: []
     };
   }
-
-  const captionNode = canvas.nodes.find(
-    (node) =>
-      node.kind === "caption" &&
-      (node.refId === sceneNode.refId || node.data.sceneId === sceneNode.refId)
-  );
 
   return {
     ...baseCaption,
@@ -515,8 +604,12 @@ function captionForScene(
 }
 
 function findSceneResources(canvas: CanvasDocument, sceneNode: CanvasNode): SceneResourceNodes {
+  const chartNode = findSceneResourceNode(canvas, sceneNode, "chart");
+
   return {
-    chartNode: findSceneResourceNode(canvas, sceneNode, "chart"),
+    captionNode: findSceneResourceNode(canvas, sceneNode, "caption"),
+    chartNode,
+    chartHighlightNodes: findChartHighlightNodes(canvas, chartNode, sceneNode),
     imageNode: findSceneResourceNode(canvas, sceneNode, "image"),
     d3Node: findSceneResourceNode(canvas, sceneNode, "d3"),
     threeNode: findSceneResourceNode(canvas, sceneNode, "three"),
@@ -541,13 +634,99 @@ function findSceneResourceNode(
   );
 }
 
-function inferSceneTypeFromResources(resources: SceneResourceNodes) {
-  if (resources.chartNode) {
-    return "astro-chart";
+function findChartHighlightNodes(
+  canvas: CanvasDocument,
+  chartNode: CanvasNode | undefined,
+  sceneNode?: CanvasNode
+) {
+  if (!chartNode) {
+    return [];
   }
 
+  const chartIds = compactStringSet([chartNode.id, chartNode.refId]);
+  const linkedHighlightIds = new Set(
+    canvas.edges.flatMap((edge) => {
+      if (edge.fromNodeId === chartNode.id) {
+        return [edge.toNodeId];
+      }
+
+      if (edge.toNodeId === chartNode.id) {
+        return [edge.fromNodeId];
+      }
+
+      return [];
+    })
+  );
+
+  return canvas.nodes
+    .filter(
+      (node) =>
+        node.kind === "chart-highlight" &&
+        isChartHighlightChildNode(node, chartIds, linkedHighlightIds) &&
+        isChartHighlightScopedToScene(node, sceneNode)
+    )
+    .sort(compareChartHighlightNodes);
+}
+
+function isChartHighlightChildNode(
+  node: CanvasNode,
+  chartIds: Set<string>,
+  linkedHighlightIds: Set<string>
+) {
+  if (linkedHighlightIds.has(node.id)) {
+    return true;
+  }
+
+  const parentIds = [
+    stringData(node, "chartId", undefined),
+    stringData(node, "chartNodeId", undefined),
+    stringData(node, "sourceChartNodeId", undefined),
+    stringData(node, "parentNodeId", undefined)
+  ];
+
+  return parentIds.some((id) => id !== undefined && chartIds.has(id));
+}
+
+function isChartHighlightScopedToScene(node: CanvasNode, sceneNode: CanvasNode | undefined) {
+  if (!sceneNode) {
+    return true;
+  }
+
+  const scopedSceneId = stringData(
+    node,
+    "sceneId",
+    stringData(node, "sourceSceneNodeId", stringData(node, "sceneNodeId", undefined))
+  );
+
+  if (!scopedSceneId) {
+    return true;
+  }
+
+  return scopedSceneId === sceneNode.id || scopedSceneId === sceneNode.refId;
+}
+
+function compareChartHighlightNodes(left: CanvasNode, right: CanvasNode) {
+  const leftStart = optionalNumberData(left, "startSec") ?? optionalNumberData(left, "timeSec");
+  const rightStart = optionalNumberData(right, "startSec") ?? optionalNumberData(right, "timeSec");
+
+  if (leftStart !== undefined || rightStart !== undefined) {
+    return (leftStart ?? Number.MAX_SAFE_INTEGER) - (rightStart ?? Number.MAX_SAFE_INTEGER);
+  }
+
+  return left.position.y - right.position.y || left.position.x - right.position.x;
+}
+
+function inferAutoSceneType(
+  sceneNode: CanvasNode,
+  resources: SceneResourceNodes,
+  explicitSceneType?: string
+): SceneSpec["type"] {
   if (resources.imageNode) {
     return "sketch";
+  }
+
+  if (resources.chartNode) {
+    return "astro-chart";
   }
 
   if (resources.d3Node) {
@@ -558,7 +737,23 @@ function inferSceneTypeFromResources(resources: SceneResourceNodes) {
     return "three-scene";
   }
 
-  return undefined;
+  if (explicitSceneType === "astro-chart") {
+    return "astro-chart";
+  }
+
+  if (explicitSceneType === "sketch") {
+    return "sketch";
+  }
+
+  if (explicitSceneType === "d3-diagram") {
+    return "d3-diagram";
+  }
+
+  if (explicitSceneType === "three-scene") {
+    return "three-scene";
+  }
+
+  return "text";
 }
 
 function sceneTypeFromComposition(resources: SceneResourceNodes): SceneSpec["type"] | undefined {
@@ -568,7 +763,7 @@ function sceneTypeFromComposition(resources: SceneResourceNodes): SceneSpec["typ
     return "text";
   }
 
-  if (visualKind === "chart" && resources.chartNode) {
+  if (visualKind === "chart") {
     return "astro-chart";
   }
 
@@ -585,6 +780,48 @@ function sceneTypeFromComposition(resources: SceneResourceNodes): SceneSpec["typ
   }
 
   return undefined;
+}
+
+function visualLayersFromComposition(
+  sceneNode: CanvasNode,
+  resources: SceneResourceNodes,
+  primarySceneType: SceneSpec["type"]
+): VisualLayer[] {
+  const secondaryVisualKind = compositionSecondaryVisualKindData(resources.compositionNode);
+
+  if (secondaryVisualKind === "none") {
+    return [];
+  }
+
+  if (secondaryVisualKind === "chart" && primarySceneType !== "astro-chart") {
+    return [chartVisualLayerFromNode(resources.chartNode ?? sceneNode)];
+  }
+
+  if (secondaryVisualKind === "image" && primarySceneType !== "sketch" && resources.imageNode) {
+    return [imageVisualLayerFromNode(resources.imageNode)];
+  }
+
+  return [];
+}
+
+function chartVisualLayerFromNode(node: CanvasNode): VisualLayer {
+  return {
+    kind: "chart",
+    title: stringData(node, "title", "星盘"),
+    assetId: stringData(node, "assetId", undefined),
+    assetUrl: stringData(node, "assetUrl", undefined),
+    assetSource: stringData(node, "provider", stringData(node, "source", undefined))
+  };
+}
+
+function imageVisualLayerFromNode(node: CanvasNode): VisualLayer {
+  return {
+    kind: "image",
+    title: stringData(node, "title", "图像"),
+    assetId: stringData(node, "assetId", undefined),
+    assetUrl: stringData(node, "assetUrl", undefined),
+    assetSource: stringData(node, "provider", stringData(node, "source", undefined))
+  };
 }
 
 function findGlobalNode(canvas: CanvasDocument, kind: CanvasNode["kind"]) {
@@ -747,6 +984,151 @@ function voiceFromNode(node?: CanvasNode): VoiceSettings {
   };
 }
 
+function chartSvgFromNode(node: CanvasNode | undefined) {
+  return stringData(node, "chartSvg", stringData(node, "svg", undefined));
+}
+
+function chartPositionsFromNode(node: CanvasNode | undefined): AstroChartPosition[] {
+  const rawPositions = node?.data.positions;
+
+  if (!Array.isArray(rawPositions)) {
+    return [];
+  }
+
+  return rawPositions.flatMap((position) => {
+    const parsed = astroChartPositionSchema.safeParse(position);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+function chartHousesFromNode(node: CanvasNode | undefined): AstroChartHouse[] {
+  const rawHouses = node?.data.houses;
+
+  if (!Array.isArray(rawHouses)) {
+    return [];
+  }
+
+  return rawHouses.flatMap((house) => {
+    const parsed = astroChartHouseSchema.safeParse(house);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+function chartCalculationFromNode(node: CanvasNode | undefined): AstroChartCalculation | undefined {
+  const parsed = astroChartCalculationSchema.safeParse(node?.data.calculation);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function chartHighlightsFromNodes(
+  nodes: Array<CanvasNode | undefined>,
+  fallbackId: string,
+  fallbackLabel: string,
+  highlightNodes: CanvasNode[] = []
+): AstroChartHighlight[] {
+  const childHighlights = chartHighlightsFromHighlightNodes(highlightNodes);
+  if (childHighlights.length > 0) {
+    return childHighlights;
+  }
+
+  for (const node of nodes) {
+    const highlights = chartHighlightsFromNode(node);
+    if (highlights.length > 0) {
+      return highlights;
+    }
+  }
+
+  return [
+    astroChartHighlightSchema.parse({
+      kind: legacyChartHighlightKind(fallbackId),
+      id: fallbackId,
+      label: fallbackLabel
+    })
+  ];
+}
+
+function chartHighlightsFromHighlightNodes(nodes: CanvasNode[]): AstroChartHighlight[] {
+  return nodes.flatMap((node) => {
+    const id = stringData(
+      node,
+      "targetId",
+      stringData(node, "highlightId", stringData(node, "highlight", "ascendant"))
+    );
+    const parsed = astroChartHighlightSchema.safeParse({
+      kind: stringData(
+        node,
+        "highlightKind",
+        stringData(node, "targetKind", legacyChartHighlightKind(id))
+      ),
+      id,
+      targetId: stringData(
+        node,
+        "secondaryTargetId",
+        stringData(node, "aspectTargetId", undefined)
+      ),
+      label: stringData(node, "label", stringData(node, "title", undefined)),
+      style: stringData(node, "style", undefined),
+      color: stringData(node, "color", undefined),
+      emphasis: optionalNumberData(node, "emphasis"),
+      startSec: optionalNumberData(node, "startSec") ?? optionalNumberData(node, "timeSec"),
+      durationSec: optionalNumberData(node, "durationSec")
+    });
+
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+function chartHighlightsFromNode(node: CanvasNode | undefined): AstroChartHighlight[] {
+  const rawHighlights = rawChartHighlightsFromNode(node);
+
+  if (!rawHighlights) {
+    return [];
+  }
+
+  return rawHighlights.flatMap((highlight) => {
+    const parsed = astroChartHighlightSchema.safeParse(highlight);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+function rawChartHighlightsFromNode(node: CanvasNode | undefined) {
+  const direct =
+    node?.data.highlights ?? node?.data.chartHighlights ?? node?.data.timelineHighlights;
+
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  const json = stringData(node, "highlightsJson", undefined);
+  if (!json) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function legacyChartHighlightKind(id: string): AstroChartHighlight["kind"] {
+  const normalized = id.toLowerCase();
+
+  if (chartAxisHighlightIds.includes(normalized as (typeof chartAxisHighlightIds)[number])) {
+    return "axis";
+  }
+
+  if (chartPlanetHighlightIds.includes(normalized as (typeof chartPlanetHighlightIds)[number])) {
+    return "planet";
+  }
+
+  if (/^(house-?|h)\d{1,2}$/.test(normalized)) {
+    return "house";
+  }
+
+  return "zodiac";
+}
+
 function stringData(node: CanvasNode | undefined, key: string, fallback: string): string;
 function stringData(
   node: CanvasNode | undefined,
@@ -765,6 +1147,15 @@ function stringData(node: CanvasNode | undefined, key: string, fallback: string 
 function numberData(node: CanvasNode | undefined, key: string, fallback: number) {
   const value = node?.data[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function optionalNumberData(node: CanvasNode | undefined, key: string) {
+  const value = node?.data[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function compactStringSet(values: Array<string | undefined>) {
+  return new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0));
 }
 
 function d3DiagramKindData(
@@ -802,6 +1193,15 @@ function compositionVisualKindData(node: CanvasNode | undefined): CompositionVis
   return compositionVisualKinds.includes(value as CompositionVisualKind)
     ? (value as CompositionVisualKind)
     : "auto";
+}
+
+function compositionSecondaryVisualKindData(
+  node: CanvasNode | undefined
+): CompositionSecondaryVisualKind {
+  const value = stringData(node, "secondaryVisualKind", "none");
+  return compositionSecondaryVisualKinds.includes(value as CompositionSecondaryVisualKind)
+    ? (value as CompositionSecondaryVisualKind)
+    : "none";
 }
 
 function transitionData(node: CanvasNode | undefined, fallback: Transition): Transition {

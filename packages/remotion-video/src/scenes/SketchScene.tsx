@@ -28,39 +28,6 @@ export function SketchScene({ scene }: { scene: SketchSceneSpec }) {
         color: "#17352f"
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: 76,
-          right: 76,
-          top: 112,
-          opacity: reveal,
-          transform: `translateY(${(1 - reveal) * 24}px)`
-        }}
-      >
-        <div
-          style={{
-            color: "#c07a3b",
-            fontSize: 32,
-            fontWeight: 900,
-            letterSpacing: 0
-          }}
-        >
-          {scene.title}
-        </div>
-        <h2
-          style={{
-            margin: "18px 0 0",
-            maxWidth: 780,
-            fontSize: 78,
-            lineHeight: 1.05,
-            letterSpacing: 0
-          }}
-        >
-          把抽象概念变成生活画面
-        </h2>
-      </div>
-
       {scene.assetUrl ? (
         <RemoteVisualAsset
           alt={scene.title}
@@ -68,9 +35,9 @@ export function SketchScene({ scene }: { scene: SketchSceneSpec }) {
           style={{
             position: "absolute",
             left: 56,
-            top: 360,
+            top: 170,
             width: 968,
-            height: 1180,
+            height: 1360,
             opacity: reveal,
             objectFit: "contain",
             transform: `translateY(${(1 - reveal) * 22}px) scale(${0.96 + reveal * 0.04})`
@@ -91,7 +58,7 @@ function FallbackSketchSvg({ dash, glow }: { dash: number; glow: number }) {
       style={{
         position: "absolute",
         left: 0,
-        top: 370,
+        top: 210,
         width: 1080,
         height: 1260
       }}

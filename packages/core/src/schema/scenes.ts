@@ -6,6 +6,13 @@ export const transitionSchema = z.enum(["cut", "fade", "wipe", "zoom"]);
 export const sceneLayoutPresetSchema = z.enum(["single", "split", "overlay"]);
 
 export const captionAnimationSchema = z.enum(["none", "fade", "rise", "typewriter"]);
+export const visualLayerSchema = z.object({
+  kind: z.enum(["chart", "image"]),
+  title: z.string().min(1).optional(),
+  assetId: idSchema.optional(),
+  assetUrl: z.string().min(1).optional(),
+  assetSource: z.string().min(1).optional()
+});
 
 export const captionCueSchema = z.object({
   id: idSchema.optional(),
@@ -42,6 +49,7 @@ export const baseSceneSchema = z.object({
   durationSec: z.number().positive(),
   transition: transitionSchema.optional(),
   layoutPreset: sceneLayoutPresetSchema.optional(),
+  visualLayers: z.array(visualLayerSchema).optional(),
   caption: captionLayoutSchema.optional(),
   voice: voiceSettingsSchema.optional()
 });
@@ -52,18 +60,75 @@ export const textSceneSchema = baseSceneSchema.extend({
   body: z.string().optional()
 });
 
+export const astroChartHighlightKindSchema = z.enum([
+  "planet",
+  "house",
+  "aspect",
+  "zodiac",
+  "axis"
+]);
+
+export const astroChartHighlightStyleSchema = z.enum([
+  "glow",
+  "ring",
+  "line",
+  "sector",
+  "label",
+  "pulse"
+]);
+
 export const astroChartHighlightSchema = z.object({
-  kind: z.enum(["planet", "house", "aspect", "zodiac"]),
+  kind: astroChartHighlightKindSchema,
   id: idSchema,
-  label: z.string().min(1)
+  targetId: idSchema.optional(),
+  label: z.string().min(1).optional(),
+  style: astroChartHighlightStyleSchema.default("glow"),
+  color: colorSchema.default("#e05f45"),
+  emphasis: z.number().min(0).max(2).default(1),
+  startSec: z.number().min(0).default(0),
+  durationSec: z.number().positive().default(1.8)
 });
+
+export const astroChartPositionSchema = z.object({
+  id: idSchema,
+  longitude: z.number().finite(),
+  sign: z.string().min(1).optional(),
+  degreeInSign: z.number().finite().optional(),
+  retrograde: z.boolean().optional()
+});
+
+export const astroChartHouseSchema = z.object({
+  house: z.number().int().min(1).max(12),
+  longitude: z.number().finite(),
+  sign: z.string().min(1).optional(),
+  degreeInSign: z.number().finite().optional()
+});
+
+export const astroChartCalculationSchema = z
+  .object({
+    engine: z.string().min(1).optional(),
+    ephemeris: z.string().min(1).optional(),
+    houseSystem: z.string().min(1).optional(),
+    zodiacMode: z.string().min(1).optional(),
+    timezone: z.string().min(1).optional(),
+    dstActive: z.boolean().optional(),
+    utcIso: z.string().min(1).optional(),
+    ascendant: z.number().finite().optional(),
+    siderealTimeDeg: z.number().finite().optional(),
+    notes: z.array(z.string()).optional()
+  })
+  .passthrough();
 
 export const astroChartSceneSchema = baseSceneSchema.extend({
   type: z.literal("astro-chart"),
   chartId: idSchema,
   chartAssetId: idSchema.optional(),
   chartAssetUrl: z.string().min(1).optional(),
+  chartSvg: z.string().min(1).optional(),
   chartSource: z.string().min(1).optional(),
+  positions: z.array(astroChartPositionSchema).default([]),
+  houses: z.array(astroChartHouseSchema).default([]),
+  calculation: astroChartCalculationSchema.optional(),
   highlights: z.array(astroChartHighlightSchema).default([])
 });
 
@@ -123,12 +188,18 @@ export const audioSpecSchema = z.object({
 export type Transition = z.infer<typeof transitionSchema>;
 export type SceneLayoutPreset = z.infer<typeof sceneLayoutPresetSchema>;
 export type CaptionAnimation = z.infer<typeof captionAnimationSchema>;
+export type VisualLayer = z.infer<typeof visualLayerSchema>;
 export type CaptionCue = z.infer<typeof captionCueSchema>;
 export type CaptionLayout = z.infer<typeof captionLayoutSchema>;
 export type VoiceSettings = z.infer<typeof voiceSettingsSchema>;
 export type BaseScene = z.infer<typeof baseSceneSchema>;
 export type TextSceneSpec = z.infer<typeof textSceneSchema>;
+export type AstroChartHighlightKind = z.infer<typeof astroChartHighlightKindSchema>;
+export type AstroChartHighlightStyle = z.infer<typeof astroChartHighlightStyleSchema>;
 export type AstroChartHighlight = z.infer<typeof astroChartHighlightSchema>;
+export type AstroChartPosition = z.infer<typeof astroChartPositionSchema>;
+export type AstroChartHouse = z.infer<typeof astroChartHouseSchema>;
+export type AstroChartCalculation = z.infer<typeof astroChartCalculationSchema>;
 export type AstroChartSceneSpec = z.infer<typeof astroChartSceneSchema>;
 export type SketchSceneSpec = z.infer<typeof sketchSceneSchema>;
 export type D3DiagramSceneSpec = z.infer<typeof d3DiagramSceneSchema>;

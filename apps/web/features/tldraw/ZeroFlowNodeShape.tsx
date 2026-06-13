@@ -146,11 +146,33 @@ export class ZeroFlowNodeShapeUtil extends BaseBoxShapeUtil<ZeroFlowNodeShape> {
             {hasVisualPreview ? <img alt="" draggable={false} src={props.assetUrl} /> : null}
             {hasCaptionPreview ? <span className="zeroflow-tl-caption-preview">{props.description}</span> : null}
             {hasAudioPreview ? (
-              <div className="zeroflow-tl-audio-preview">
-                <span />
-                <span />
-                <span />
-                <strong>{props.assetUrl ? "音频已生成" : props.description || "音频配置"}</strong>
+              <div
+                className="zeroflow-tl-audio-preview"
+                onClick={stopTldrawMouseEvent}
+                onDoubleClick={stopTldrawMouseEvent}
+                onPointerDown={stopTldrawPointerEvent}
+              >
+                <div className="zeroflow-tl-audio-bars" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div className="zeroflow-tl-audio-content">
+                  <strong>{props.assetUrl ? "Audio ready" : props.description || "Audio config"}</strong>
+                  {props.assetUrl ? (
+                    <div className="zeroflow-tl-audio-controls">
+                      <button
+                        className="zeroflow-tl-audio-play"
+                        type="button"
+                        onClick={toggleTldrawAudio}
+                        onPointerDown={stopTldrawPointerEvent}
+                      >
+                        Play
+                      </button>
+                      <audio preload="metadata" src={props.assetUrl} />
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>
@@ -200,7 +222,39 @@ function dispatchNodeAction(event: MouseEvent<HTMLButtonElement>, nodeId: string
   );
 }
 
-function stopTldrawPointerEvent(event: PointerEvent<HTMLButtonElement>) {
+function toggleTldrawAudio(event: MouseEvent<HTMLButtonElement>) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const button = event.currentTarget;
+  const preview = button.closest(".zeroflow-tl-audio-preview");
+  const audio = preview?.querySelector("audio");
+
+  if (!(audio instanceof HTMLAudioElement)) {
+    return;
+  }
+
+  if (audio.paused) {
+    void audio
+      .play()
+      .then(() => {
+        button.textContent = "Pause";
+      })
+      .catch(() => {
+        button.textContent = "Play";
+      });
+    return;
+  }
+
+  audio.pause();
+  button.textContent = "Play";
+}
+
+function stopTldrawMouseEvent(event: MouseEvent<HTMLElement>) {
+  event.stopPropagation();
+}
+
+function stopTldrawPointerEvent(event: PointerEvent<HTMLElement>) {
   event.stopPropagation();
 }
 

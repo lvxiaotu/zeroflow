@@ -134,10 +134,15 @@ export const demoCanvasDocument: CanvasDocument = {
         birthDate: "1990-01-01",
         birthTime: "12:00",
         timezoneOffsetMinutes: 480,
+        timezone: "Asia/Shanghai",
         latitude: 39.9042,
         longitude: 116.4074,
         placeName: "北京",
-        houseSystem: "equal"
+        houseSystem: "equal",
+        zodiacMode: "tropical",
+        siderealAyanamsa: "lahiri",
+        planetSet: "modern",
+        nodeType: "mean"
       }
     },
     {
@@ -148,9 +153,9 @@ export const demoCanvasDocument: CanvasDocument = {
       size: { width: 270, height: 160 },
       status: "ready",
       data: {
-        title: "简笔画",
+        title: "图像",
         description: "人推开门走进星空房间",
-        prompt: "simple line drawing, a person opening a door into a starry room"
+        prompt: "简洁线稿插画：一个人推开门走进星空房间，画面温暖清晰"
       }
     },
     {
@@ -166,7 +171,7 @@ export const demoCanvasDocument: CanvasDocument = {
         durationSec: 8,
         diagram: "timeline",
         dataJson:
-          "{\"events\":[{\"label\":\"Birth moment\",\"value\":0},{\"label\":\"Eastern horizon\",\"value\":1},{\"label\":\"Rising sign\",\"value\":2},{\"label\":\"First impression\",\"value\":3}]}"
+          '{"events":[{"label":"Birth moment","value":0},{"label":"Eastern horizon","value":1},{"label":"Rising sign","value":2},{"label":"First impression","value":3}]}'
       }
     },
     {
@@ -185,7 +190,7 @@ export const demoCanvasDocument: CanvasDocument = {
         speed: 0.72,
         accentColor: "#e8c164",
         dataJson:
-          "{\"preset\":\"orbit\",\"camera\":\"portrait-orbit\",\"speed\":0.72,\"accentColor\":\"#e8c164\",\"focus\":\"Ascendant\"}"
+          '{"preset":"orbit","camera":"portrait-orbit","speed":0.72,"accentColor":"#e8c164","focus":"Ascendant"}'
       }
     },
     {
@@ -226,21 +231,91 @@ export const demoCanvasDocument: CanvasDocument = {
     }
   ],
   edges: [
-    { id: "edge-topic-script", fromNodeId: "node-topic", toNodeId: "node-script", relation: "produces" },
-    { id: "edge-script-storyboard", fromNodeId: "node-script", toNodeId: "node-storyboard", relation: "produces" },
-    { id: "edge-storyboard-scene", fromNodeId: "node-storyboard", toNodeId: "node-scene-1", relation: "produces" },
-    { id: "edge-scene-caption", fromNodeId: "node-scene-1", toNodeId: "node-caption-1", relation: "uses" },
-    { id: "edge-scene-voice", fromNodeId: "node-scene-1", toNodeId: "node-voice", relation: "uses" },
-    { id: "edge-scene-chart", fromNodeId: "node-scene-1", toNodeId: "node-chart", relation: "uses" },
-    { id: "edge-scene-image", fromNodeId: "node-scene-1", toNodeId: "node-image", relation: "uses" },
+    {
+      id: "edge-topic-script",
+      fromNodeId: "node-topic",
+      toNodeId: "node-script",
+      relation: "produces"
+    },
+    {
+      id: "edge-script-storyboard",
+      fromNodeId: "node-script",
+      toNodeId: "node-storyboard",
+      relation: "produces"
+    },
+    {
+      id: "edge-storyboard-scene",
+      fromNodeId: "node-storyboard",
+      toNodeId: "node-scene-1",
+      relation: "produces"
+    },
+    {
+      id: "edge-scene-caption",
+      fromNodeId: "node-scene-1",
+      toNodeId: "node-caption-1",
+      relation: "uses"
+    },
+    {
+      id: "edge-scene-voice",
+      fromNodeId: "node-scene-1",
+      toNodeId: "node-voice",
+      relation: "uses"
+    },
+    {
+      id: "edge-scene-chart",
+      fromNodeId: "node-scene-1",
+      toNodeId: "node-chart",
+      relation: "uses"
+    },
+    {
+      id: "edge-scene-image",
+      fromNodeId: "node-scene-1",
+      toNodeId: "node-image",
+      relation: "uses"
+    },
     { id: "edge-scene-d3", fromNodeId: "node-scene-1", toNodeId: "node-d3", relation: "uses" },
-    { id: "edge-scene-three", fromNodeId: "node-scene-1", toNodeId: "node-three", relation: "uses" },
-    { id: "edge-assets-composition", fromNodeId: "node-image", toNodeId: "node-composition", relation: "renders" },
-    { id: "edge-chart-composition", fromNodeId: "node-chart", toNodeId: "node-composition", relation: "renders" },
-    { id: "edge-d3-composition", fromNodeId: "node-d3", toNodeId: "node-composition", relation: "renders" },
-    { id: "edge-three-composition", fromNodeId: "node-three", toNodeId: "node-composition", relation: "renders" },
-    { id: "edge-composition-preview", fromNodeId: "node-composition", toNodeId: "node-preview", relation: "renders" },
-    { id: "edge-preview-export", fromNodeId: "node-preview", toNodeId: "node-export", relation: "produces" }
+    {
+      id: "edge-scene-three",
+      fromNodeId: "node-scene-1",
+      toNodeId: "node-three",
+      relation: "uses"
+    },
+    {
+      id: "edge-assets-composition",
+      fromNodeId: "node-image",
+      toNodeId: "node-composition",
+      relation: "renders"
+    },
+    {
+      id: "edge-chart-composition",
+      fromNodeId: "node-chart",
+      toNodeId: "node-composition",
+      relation: "renders"
+    },
+    {
+      id: "edge-d3-composition",
+      fromNodeId: "node-d3",
+      toNodeId: "node-composition",
+      relation: "renders"
+    },
+    {
+      id: "edge-three-composition",
+      fromNodeId: "node-three",
+      toNodeId: "node-composition",
+      relation: "renders"
+    },
+    {
+      id: "edge-composition-preview",
+      fromNodeId: "node-composition",
+      toNodeId: "node-preview",
+      relation: "renders"
+    },
+    {
+      id: "edge-preview-export",
+      fromNodeId: "node-preview",
+      toNodeId: "node-export",
+      relation: "produces"
+    }
   ]
 };
 

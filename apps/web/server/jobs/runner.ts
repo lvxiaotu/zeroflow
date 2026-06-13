@@ -1,6 +1,7 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { deflateSync } from "node:zlib";
 import {
   defaultScriptPromptProfileId,
   type AstroVideoSpec,
@@ -13,6 +14,7 @@ import {
   addProjectAssetRef,
   createProjectAsset,
   getJob,
+  getImagePromptPresetAdditions,
   getProjectAssetDir,
   getWorkspaceRoot,
   getVideoProject,
@@ -23,7 +25,7 @@ import {
   updateVideoProject
 } from "@zeroflow/db";
 import { getProviders } from "@zeroflow/providers";
-import type { BirthChartInput } from "@zeroflow/providers";
+import type { BirthChartInput, D3DiagramKind, GeneratedStoryboard } from "@zeroflow/providers";
 
 const defaultTargetDurationSec = 60;
 
@@ -63,10 +65,12 @@ export async function runPendingJobs(input: { projectId?: string; limit?: number
   const pendingJobs = listJobs(input.projectId)
     .filter((job) => job.status === "pending")
     .slice(0, limit);
+  const concurrency = Math.max(1, Math.min(limit, 4));
   const results = [];
 
-  for (const job of pendingJobs) {
-    results.push(await runJob(job.id));
+  for (let index = 0; index < pendingJobs.length; index += concurrency) {
+    const batch = pendingJobs.slice(index, index + concurrency);
+    results.push(...(await Promise.all(batch.map((job) => runJob(job.id)))));
   }
 
   return {
@@ -93,6 +97,8 @@ async function runJobByType(job: Job): Promise<Record<string, unknown>> {
       return resolveAssets(job);
     case "generate-image":
       return generateImage(job);
+    case "generate-d3":
+      return generateD3(job);
     case "generate-tts":
       return generateTts(job);
     case "generate-chart":
@@ -105,10 +111,14 @@ async function runJobByType(job: Job): Promise<Record<string, unknown>> {
       return createSceneVisualNode(job, "three");
     case "create-composition-node":
       return createCompositionNode(job);
+    case "create-preview-flow":
+      return createPreviewFlow(job);
     case "create-preview-node":
       return createPreviewNode(job);
     case "create-export-node":
       return createExportNode(job);
+    case "create-project-export-node":
+      return createProjectExportNode(job);
     case "export-visual-asset":
       return exportVisualAsset(job);
     case "render-preview":
@@ -142,15 +152,16 @@ async function generateScript(job: Job) {
     stringData(topicNode, "scriptProfileId") ??
     stringData(scriptNode, "scriptProfileId") ??
     defaultScriptPromptProfileId;
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "targetDurationSec") ??
+    numberData(scriptNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
   const result = await getProviders().llm.generateScript({
     topic,
     model,
     scriptProfileId,
-    targetDurationSec:
-      numberInput(job.input.targetDurationSec) ??
-      numberData(sourceNode, "targetDurationSec") ??
-      numberData(scriptNode, "targetDurationSec") ??
-      defaultTargetDurationSec,
+    targetDurationSec,
     tone:
       stringInput(job.input.tone) ??
       stringData(sourceNode, "tone") ??
@@ -162,11 +173,8 @@ async function generateScript(job: Job) {
     description: result.data.hook,
     scriptText: result.data.scriptText,
     tone: result.data.tone,
-    targetDurationSec:
-      numberInput(job.input.targetDurationSec) ??
-      numberData(sourceNode, "targetDurationSec") ??
-      result.data.targetDurationSec,
-    sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
+    targetDurationSec: result.data.targetDurationSec ?? targetDurationSec,
+    sceneCount: numberData(scriptNode, "sceneCount") ?? getDefaultSceneCount(targetDurationSec),
     aiModel: model,
     scriptProfileId,
     provider: result.provider,
@@ -200,9 +208,7 @@ async function createManualScript(job: Job) {
     stringData(topicNode, "topic") ??
     project.topic;
   const scriptText =
-    stringInput(job.input.scriptText) ??
-    stringData(scriptNode, "scriptText") ??
-    "";
+    stringInput(job.input.scriptText) ?? stringData(scriptNode, "scriptText") ?? "";
   const targetDurationSec =
     numberInput(job.input.targetDurationSec) ??
     numberData(sourceNode, "targetDurationSec") ??
@@ -213,7 +219,7 @@ async function createManualScript(job: Job) {
     description: scriptText ? "手写口播文案" : "",
     scriptText,
     targetDurationSec,
-    sceneCount: numberData(scriptNode, "sceneCount") ?? 5,
+    sceneCount: numberData(scriptNode, "sceneCount") ?? getDefaultSceneCount(targetDurationSec),
     aiModel: stringData(sourceNode, "aiModel") ?? stringData(scriptNode, "aiModel"),
     scriptProfileId:
       stringData(sourceNode, "scriptProfileId") ??
@@ -276,18 +282,36 @@ async function generateStoryboard(job: Job) {
       numberData(storyboardNode, "targetDurationSec") ??
       defaultTargetDurationSec
   });
-  const canvas = applyStoryboard(project.canvas, sourceNode ?? scriptNode ?? storyboardNode, result.data.scenes, {
-    aiModel: model
+  const targetDurationSec =
+    numberInput(job.input.targetDurationSec) ??
+    numberData(sourceNode, "targetDurationSec") ??
+    numberData(scriptNode, "targetDurationSec") ??
+    numberData(storyboardNode, "targetDurationSec") ??
+    defaultTargetDurationSec;
+  const scenes = normalizeGeneratedStoryboardScenes(result.data.scenes, {
+    requestedSceneCount: sceneCount,
+    targetDurationSec,
+    scriptText
   });
+  const canvas = applyStoryboard(
+    project.canvas,
+    sourceNode ?? scriptNode ?? storyboardNode,
+    scenes,
+    {
+      aiModel: model
+    }
+  );
 
   updateVideoProject(project.id, { canvas });
 
   return {
     provider: result.provider,
     usedMock: result.usedMock,
-    sceneCount: result.data.scenes.length,
-    sceneNodeIds: result.data.scenes.map((_, index) => `node-scene-generated-${index + 1}`),
-    scenes: result.data.scenes
+    requestedSceneCount: sceneCount,
+    rawSceneCount: result.data.scenes.length,
+    sceneCount: scenes.length,
+    sceneNodeIds: scenes.map((_, index) => `node-scene-generated-${index + 1}`),
+    scenes
   };
 }
 
@@ -296,7 +320,8 @@ async function createStructureNode(job: Job) {
   const sourceNode = job.canvasNodeId
     ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
     : undefined;
-  const scriptNode = sourceNode?.kind === "script" ? sourceNode : findNode(project.canvas, "script");
+  const scriptNode =
+    sourceNode?.kind === "script" ? sourceNode : findNode(project.canvas, "script");
   const structureNode = findNode(project.canvas, "structure");
   const targetDurationSec =
     numberInput(job.input.targetDurationSec) ??
@@ -339,7 +364,8 @@ async function generateChapters(job: Job) {
   const sourceNode = job.canvasNodeId
     ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
     : undefined;
-  const structureNode = sourceNode?.kind === "structure" ? sourceNode : findNode(project.canvas, "structure");
+  const structureNode =
+    sourceNode?.kind === "structure" ? sourceNode : findNode(project.canvas, "structure");
   const scriptNode = findNode(project.canvas, "script");
   const targetDurationSec =
     numberInput(job.input.targetDurationSec) ??
@@ -396,7 +422,7 @@ async function expandChapterScenes(job: Job) {
   const sceneCount =
     numberInput(job.input.sceneCount) ??
     numberData(sourceNode, "sceneCount") ??
-    getDefaultSceneCount(targetDurationSec);
+    getDefaultChapterSceneCount(targetDurationSec);
   const model = stringInput(job.input.model) ?? stringData(sourceNode, "aiModel");
   const result = await getProviders().llm.generateStoryboard({
     scriptText: chapterScriptText,
@@ -404,8 +430,13 @@ async function expandChapterScenes(job: Job) {
     model,
     targetDurationSec
   });
+  const scenes = normalizeGeneratedStoryboardScenes(result.data.scenes, {
+    requestedSceneCount: sceneCount,
+    targetDurationSec,
+    scriptText: chapterScriptText
+  });
   const groupId = `chapter-${safeId(sourceNode.id)}`;
-  const canvas = applyStoryboard(project.canvas, sourceNode, result.data.scenes, {
+  const canvas = applyStoryboard(project.canvas, sourceNode, scenes, {
     aiModel: model,
     groupId,
     sourceChapterNodeId: sourceNode.id,
@@ -419,9 +450,11 @@ async function expandChapterScenes(job: Job) {
     provider: result.provider,
     usedMock: result.usedMock,
     chapterNodeId: sourceNode.id,
-    sceneCount: result.data.scenes.length,
-    sceneNodeIds: result.data.scenes.map((_, index) => `node-${groupId}-scene-${index + 1}`),
-    scenes: result.data.scenes
+    requestedSceneCount: sceneCount,
+    rawSceneCount: result.data.scenes.length,
+    sceneCount: scenes.length,
+    sceneNodeIds: scenes.map((_, index) => `node-${groupId}-scene-${index + 1}`),
+    scenes
   };
 }
 
@@ -453,6 +486,11 @@ async function generateImage(job: Job) {
     stringInput(job.input.model) ??
     stringData(sourceNode, "imageModel") ??
     stringData(sourceNode, "aiModel");
+  const imageStyle = normalizeImageStyle(
+    stringInput(job.input.imageStyle) ??
+      stringData(sourceNode, "imageStyle") ??
+      stringData(sourceNode, "visualStyle")
+  );
 
   if (!imageNode && sceneNode) {
     const upserted = upsertSceneResourceNode(workingCanvas, sceneNode, "image", {
@@ -464,81 +502,254 @@ async function generateImage(job: Job) {
         stringInput(job.input.prompt) ??
         stringData(sceneNode, "visualPrompt") ??
         stringData(sceneNode, "description") ??
-        "simple educational astrology line drawing",
-      aiModel: inputModel
+        "简洁的占星教学插画，清晰表达核心概念，适合短视频画面",
+      aiModel: inputModel,
+      imageOutputFormat: "raster",
+      imageStyle
     });
     workingCanvas = upserted.canvas;
     imageNode = upserted.node;
   }
 
   imageNode ??= findNode(workingCanvas, "image");
-  const prompt =
+  const model = normalizeImageModel(inputModel ?? stringData(imageNode, "aiModel"));
+  const rawPrompt =
     stringInput(job.input.prompt) ??
     stringData(imageNode, "prompt") ??
     stringData(sceneNode, "visualPrompt") ??
-    "simple educational astrology line drawing";
-  const model = inputModel ?? stringData(imageNode, "aiModel");
-  const outputPath = path.join(getProjectAssetDir(project.id), `${job.id}.png`);
-  const result = await getProviders().image.generateImage({
-    prompt,
-    model,
-    outputPath,
-    size: "1024x1536"
+    "简洁的占星教学插画，清晰表达核心概念，适合短视频画面";
+  const prompt = normalizeImagePrompt(rawPrompt, {
+    title: stringData(imageNode, "title") ?? stringData(sceneNode, "title"),
+    description: stringData(imageNode, "description") ?? stringData(sceneNode, "description"),
+    narration: stringData(imageNode, "narration") ?? stringData(sceneNode, "narration"),
+    imageStyle
   });
-  const assetPath = result.usedMock
-    ? path.join(getProjectAssetDir(project.id), `${job.id}.svg`)
-    : (result.data.assetPath ?? outputPath);
+  const promptPresetAdditions = getImagePromptPresetAdditions({
+    imageStyle
+  });
+  const providerPrompt = appendImagePromptPresetAdditions(prompt, promptPresetAdditions);
+  const requestedAssetPath = path.join(getProjectAssetDir(project.id), `${job.id}.png`);
+  const result = await getProviders().image.generateImage({
+    prompt: providerPrompt,
+    model,
+    outputPath: requestedAssetPath,
+    size: "1536x1024"
+  });
+  const finalAssetPath = result.data.assetPath ?? requestedAssetPath;
+  const finalOutputFormat = "raster";
+  const finalAssetKind = "image";
+  const effectiveModel = result.data.model ?? model;
+  const imageSize = "size" in result.data ? result.data.size : undefined;
 
   if (result.usedMock) {
-    await writeMockSvg(assetPath, prompt);
+    await writeMockPng(finalAssetPath);
   }
+
+  const promptMetadata =
+    providerPrompt === prompt
+      ? { prompt, sourcePrompt: rawPrompt === prompt ? undefined : rawPrompt }
+      : {
+          prompt,
+          sourcePrompt: rawPrompt === prompt ? undefined : rawPrompt,
+          providerPrompt,
+          promptPresetAdditions
+        };
 
   const asset = createProjectAsset({
     projectId: project.id,
     name: `插画 ${new Date().toLocaleString("zh-CN")}`,
-    kind: "image",
-    path: assetPath,
+    kind: finalAssetKind,
+    path: finalAssetPath,
     metadata: {
-      prompt,
+      ...promptMetadata,
       model,
+      requestedModel: model,
+      effectiveModel,
+      imageStyle,
+      imageSize,
       provider: result.provider,
       usedMock: result.usedMock,
-      url: result.data.url
+      outputFormat: finalOutputFormat,
+      url: "url" in result.data ? result.data.url : undefined
     }
   });
-  addProjectAssetRef(project.id, {
-    assetId: asset.id,
-    assetScope: "project",
-    usage: "scene",
-    canvasNodeId: imageNode?.id
-  });
-
   const assetUrl = `/api/project-asset?assetId=${encodeURIComponent(asset.id)}`;
+  let finalImageNodeId = imageNode?.id;
 
   if (imageNode) {
+    let targetImageNodeId = imageNode.id;
+    const latestProject = getVideoProject(project.id);
+    let nextCanvas = latestProject?.canvas ?? workingCanvas;
+
+    if (sceneNode) {
+      const latestSceneNode =
+        nextCanvas.nodes.find((node) => node.id === sceneNode.id) ?? sceneNode;
+      const upserted = upsertSceneResourceNode(nextCanvas, latestSceneNode, "image", {
+        generatedBy: "generate-image",
+        title: `插画 ${sceneResourceTitle(latestSceneNode)}`,
+        description: sceneResourceDescription(latestSceneNode),
+        durationSec: numberData(latestSceneNode, "durationSec") ?? 6,
+        prompt,
+        aiModel: model,
+        imageOutputFormat: finalOutputFormat,
+        imageStyle
+      });
+      nextCanvas = upserted.canvas;
+      targetImageNodeId = upserted.node.id;
+    } else if (!nextCanvas.nodes.some((node) => node.id === imageNode.id)) {
+      nextCanvas = {
+        ...nextCanvas,
+        nodes: nextCanvas.nodes.concat(imageNode)
+      };
+    }
+
+    finalImageNodeId = targetImageNodeId;
     updateVideoProject(project.id, {
-      canvas: updateNodeData(workingCanvas, imageNode.id, {
+      canvas: updateNodeData(nextCanvas, targetImageNodeId, {
         refId: asset.id,
-        assetPath,
+        assetPath: finalAssetPath,
         assetId: asset.id,
         assetUrl,
         provider: result.provider,
         usedMock: result.usedMock,
+        imageOutputFormat: finalOutputFormat,
+        imageStyle,
         prompt,
         aiModel: model
       })
     });
   }
 
+  addProjectAssetRef(project.id, {
+    assetId: asset.id,
+    assetScope: "project",
+    usage: "scene",
+    canvasNodeId: finalImageNodeId
+  });
+
   return {
     provider: result.provider,
     usedMock: result.usedMock,
     assetId: asset.id,
-    assetPath,
+    assetPath: finalAssetPath,
     assetUrl,
-    imageNodeId: imageNode?.id,
+    imageNodeId: finalImageNodeId,
     model,
+    requestedModel: model,
+    effectiveModel,
+    imageStyle,
+    imageSize,
+    prompt,
+    providerPrompt,
+    promptPresetAdditions,
     asset
+  };
+}
+
+async function generateD3(job: Job) {
+  const project = requireProject(job.projectId);
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+  const sceneNode = sourceNode?.kind === "scene" ? sourceNode : undefined;
+  let workingCanvas = project.canvas;
+  let d3Node = sourceNode?.kind === "d3" ? sourceNode : undefined;
+  const preferredDiagram = normalizeD3Diagram(
+    stringInput(job.input.diagram) ?? stringData(sourceNode, "diagram")
+  );
+  const sceneTitle = sceneNode ? sceneResourceTitle(sceneNode) : undefined;
+
+  if (!d3Node && sceneNode) {
+    const upserted = upsertSceneResourceNode(workingCanvas, sceneNode, "d3", {
+      generatedBy: "generate-d3",
+      title: stringInput(job.input.title) ?? `D3 ${sceneTitle}`,
+      description: stringInput(job.input.description) ?? sceneResourceDescription(sceneNode),
+      narration:
+        stringInput(job.input.narration) ??
+        stringData(sceneNode, "narration") ??
+        sceneResourceDescription(sceneNode),
+      durationSec: numberInput(job.input.durationSec) ?? numberData(sceneNode, "durationSec") ?? 6,
+      prompt:
+        stringInput(job.input.prompt) ??
+        stringData(sceneNode, "visualPrompt") ??
+        stringData(sceneNode, "description") ??
+        sceneResourceDescription(sceneNode),
+      visualPreset: preferredDiagram,
+      diagram: preferredDiagram,
+      renderMode: "contract",
+      dataJson: stableJson(defaultD3ResourceData(preferredDiagram, sceneTitle ?? "D3"))
+    });
+    workingCanvas = upserted.canvas;
+    d3Node = upserted.node;
+  }
+
+  d3Node ??= findNode(workingCanvas, "d3");
+
+  if (!d3Node) {
+    throw new Error("A D3 node or scene node is required to generate a D3 chart");
+  }
+
+  const title = stringInput(job.input.title) ?? stringData(d3Node, "title") ?? "D3 Diagram";
+  const description =
+    stringInput(job.input.description) ??
+    stringData(d3Node, "description") ??
+    stringData(sceneNode, "description") ??
+    title;
+  const narration =
+    stringInput(job.input.narration) ??
+    stringData(d3Node, "narration") ??
+    stringData(sceneNode, "narration") ??
+    description;
+  const prompt =
+    stringInput(job.input.prompt) ??
+    stringData(d3Node, "prompt") ??
+    stringData(sceneNode, "visualPrompt") ??
+    description;
+  const model = normalizeLlmModel(stringInput(job.input.model) ?? stringData(d3Node, "aiModel"));
+  const durationSec =
+    numberInput(job.input.durationSec) ?? numberData(d3Node, "durationSec") ?? 8;
+  const result = await getProviders().llm.generateD3Contract({
+    prompt,
+    title,
+    description,
+    narration,
+    diagram: preferredDiagram,
+    durationSec,
+    model
+  });
+  const contract = normalizeGeneratedD3Contract(result.data, {
+    title,
+    description,
+    narration,
+    diagram: preferredDiagram,
+    durationSec
+  });
+  const canvas = updateNodeData(workingCanvas, d3Node.id, {
+    generatedBy: "generate-d3",
+    prompt,
+    title: contract.title,
+    description: contract.description,
+    narration: contract.narration,
+    durationSec: contract.durationSec,
+    visualPreset: contract.diagram,
+    diagram: contract.diagram,
+    renderMode: "contract",
+    dataJson: contract.dataJson,
+    provider: result.provider,
+    usedMock: result.usedMock,
+    aiModel: model
+  });
+
+  updateVideoProject(project.id, { canvas });
+
+  return {
+    provider: result.provider,
+    usedMock: result.usedMock,
+    d3NodeId: d3Node.id,
+    model,
+    diagram: contract.diagram,
+    title: contract.title,
+    dataJson: contract.dataJson
   };
 }
 
@@ -583,8 +794,8 @@ async function generateTts(job: Job) {
     outputPath,
     referenceAudioPath: stringInput(job.input.referenceAudioPath),
     referenceAudioName: stringInput(job.input.referenceAudioName),
-    chunkMax: numberInput(job.input.chunkMax) ?? 220,
-    pauseMs: numberInput(job.input.pauseMs) ?? 180,
+    chunkMax: numberInput(job.input.chunkMax) ?? 80,
+    pauseMs: numberInput(job.input.pauseMs) ?? 260,
     dryRun: Boolean(job.input.dryRun)
   });
   const audioPath = result.usedMock
@@ -599,6 +810,11 @@ async function generateTts(job: Job) {
     }
   }
 
+  const ttsManifest = await readTtsManifestCues(result.data.manifestPath);
+  const manifestDurationSec = totalTtsCuesDuration(ttsManifest?.cues);
+  const probedAudioDurationSec = await probeAudioDurationSec(audioPath);
+  const audioDurationSec = maxDurationSec(manifestDurationSec, probedAudioDurationSec);
+
   const asset = createProjectAsset({
     projectId: project.id,
     name: `配音 ${new Date().toLocaleString("zh-CN")}`,
@@ -608,30 +824,65 @@ async function generateTts(job: Job) {
     metadata: {
       provider: result.provider,
       usedMock: result.usedMock,
-      manifestPath: result.data.manifestPath
+      manifestPath: result.data.manifestPath,
+      manifestDurationSec,
+      probedAudioDurationSec,
+      audioDurationSec
     }
   });
-  addProjectAssetRef(project.id, {
-    assetId: asset.id,
-    assetScope: "project",
-    usage: "narration",
-    canvasNodeId: voiceNode?.id
-  });
   const assetUrl = `/api/project-asset?assetId=${encodeURIComponent(asset.id)}`;
+  let finalVoiceNodeId = voiceNode?.id;
 
   if (voiceNode) {
+    let targetVoiceNodeId = voiceNode.id;
+    const latestProject = getVideoProject(project.id);
+    let nextCanvas = latestProject?.canvas ?? workingCanvas;
+
+    if (sceneNode) {
+      const latestSceneNode =
+        nextCanvas.nodes.find((node) => node.id === sceneNode.id) ?? sceneNode;
+      const upserted = upsertSceneResourceNode(nextCanvas, latestSceneNode, "voice", {
+        generatedBy: "generate-tts",
+        title: `配音 ${sceneResourceTitle(latestSceneNode)}`,
+        description: text,
+        narration: text,
+        text,
+        durationSec: audioDurationSec ?? numberData(latestSceneNode, "durationSec") ?? 6,
+        speed: numberData(voiceNode, "speed") ?? 1,
+        volume: numberData(voiceNode, "volume") ?? 1
+      });
+      nextCanvas = upserted.canvas;
+      targetVoiceNodeId = upserted.node.id;
+    } else if (!nextCanvas.nodes.some((node) => node.id === voiceNode.id)) {
+      nextCanvas = {
+        ...nextCanvas,
+        nodes: nextCanvas.nodes.concat(voiceNode)
+      };
+    }
+
+    finalVoiceNodeId = targetVoiceNodeId;
     updateVideoProject(project.id, {
-      canvas: updateNodeData(workingCanvas, voiceNode.id, {
+      canvas: updateNodeData(nextCanvas, targetVoiceNodeId, {
         refId: asset.id,
         assetId: asset.id,
         assetPath: audioPath,
         assetUrl,
         provider: result.provider,
         usedMock: result.usedMock,
-        manifestPath: result.data.manifestPath
+        manifestPath: result.data.manifestPath,
+        manifestDurationSec,
+        probedAudioDurationSec,
+        audioDurationSec
       })
     });
   }
+
+  addProjectAssetRef(project.id, {
+    assetId: asset.id,
+    assetScope: "project",
+    usage: "narration",
+    canvasNodeId: finalVoiceNodeId
+  });
 
   return {
     provider: result.provider,
@@ -640,7 +891,10 @@ async function generateTts(job: Job) {
     assetPath: audioPath,
     assetUrl,
     audioPath,
-    voiceNodeId: voiceNode?.id,
+    audioDurationSec,
+    manifestDurationSec,
+    probedAudioDurationSec,
+    voiceNodeId: finalVoiceNodeId,
     asset,
     manifestPath: result.data.manifestPath
   };
@@ -665,10 +919,15 @@ async function generateChart(job: Job) {
       birthDate: stringInput(job.input.birthDate) ?? "1990-01-01",
       birthTime: stringInput(job.input.birthTime) ?? "12:00",
       timezoneOffsetMinutes: numberInput(job.input.timezoneOffsetMinutes) ?? 480,
+      timezone: stringInput(job.input.timezone) ?? "Asia/Shanghai",
       latitude: numberInput(job.input.latitude) ?? 39.9042,
       longitude: numberInput(job.input.longitude) ?? 116.4074,
       placeName: stringInput(job.input.placeName) ?? "Beijing",
       houseSystem: stringInput(job.input.houseSystem) ?? "equal",
+      zodiacMode: stringInput(job.input.zodiacMode) ?? "tropical",
+      siderealAyanamsa: stringInput(job.input.siderealAyanamsa) ?? "lahiri",
+      planetSet: stringInput(job.input.planetSet) ?? "modern",
+      nodeType: stringInput(job.input.nodeType) ?? "mean",
       chartType: stringInput(job.input.chartType) ?? "natal",
       highlight: stringInput(job.input.highlight) ?? "ascendant"
     });
@@ -684,6 +943,8 @@ async function generateChart(job: Job) {
     birth,
     highlight: stringData(chartNode, "highlight") ?? "ascendant"
   });
+  const chartRenderer = "AstroChart SVG";
+  const chartCalculator = result.data.calculation?.engine ?? "Swiss Ephemeris";
   const asset = createProjectAsset({
     projectId: project.id,
     name: "星盘 SVG",
@@ -691,6 +952,8 @@ async function generateChart(job: Job) {
     path: result.data.assetPath,
     metadata: {
       provider: result.provider,
+      renderer: chartRenderer,
+      calculator: chartCalculator,
       chartType: stringData(chartNode, "chartType") ?? "natal",
       highlight: stringData(chartNode, "highlight") ?? "ascendant",
       usedSampleData: result.data.usedSampleData,
@@ -717,7 +980,10 @@ async function generateChart(job: Job) {
         assetPath: result.data.assetPath,
         assetId: asset.id,
         assetUrl,
+        chartSvg: result.data.svg,
         provider: result.provider,
+        renderer: chartRenderer,
+        calculator: chartCalculator,
         chartType: stringData(chartNode, "chartType") ?? "natal",
         highlight: stringData(chartNode, "highlight") ?? "ascendant",
         usedSampleData: result.data.usedSampleData,
@@ -737,7 +1003,10 @@ async function generateChart(job: Job) {
     assetPath: result.data.assetPath,
     usedSampleData: result.data.usedSampleData,
     assetUrl,
+    renderer: chartRenderer,
+    calculator: chartCalculator,
     chartNodeId: chartNode?.id,
+    chartSvg: result.data.svg,
     source: result.data.source,
     birth: result.data.birth,
     positions: result.data.positions,
@@ -761,9 +1030,7 @@ async function createSceneVisualNode(job: Job, kind: "d3" | "three") {
     project.canvas,
     sceneNode,
     kind,
-    kind === "d3"
-      ? sceneD3ResourceData(job, sceneNode)
-      : sceneThreeResourceData(job, sceneNode)
+    kind === "d3" ? sceneD3ResourceData(job, sceneNode) : sceneThreeResourceData(job, sceneNode)
   );
 
   updateVideoProject(project.id, { canvas: upserted.canvas });
@@ -801,6 +1068,32 @@ async function createCompositionNode(job: Job) {
   };
 }
 
+async function createPreviewFlow(job: Job) {
+  const project = requireProject(job.projectId);
+  const sourceNode = job.canvasNodeId
+    ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
+    : undefined;
+  const anchor = resolveCompositionAnchor(project.canvas, sourceNode);
+
+  if (!anchor.sceneNode) {
+    throw new Error("A scene or scene resource node is required to create a preview flow");
+  }
+
+  const composition = upsertCompositionNode(project.canvas, anchor.sceneNode, sourceNode);
+  const preview = upsertPreviewNode(composition.canvas, composition.node);
+
+  updateVideoProject(project.id, { canvas: preview.canvas });
+
+  return {
+    provider: "local-canvas-node-factory",
+    usedMock: false,
+    sceneNodeId: anchor.sceneNode.id,
+    compositionNodeId: composition.node.id,
+    previewNodeId: preview.node.id,
+    nodeId: preview.node.id
+  };
+}
+
 async function createPreviewNode(job: Job) {
   const project = requireProject(job.projectId);
   const sourceNode = job.canvasNodeId
@@ -830,13 +1123,15 @@ async function createExportNode(job: Job) {
   const sourceNode = job.canvasNodeId
     ? project.canvas.nodes.find((node) => node.id === job.canvasNodeId)
     : undefined;
-  const previewNode = sourceNode?.kind === "preview" ? sourceNode : findNode(project.canvas, "preview");
+  const previewNode =
+    sourceNode?.kind === "preview" ? sourceNode : findNode(project.canvas, "preview");
 
   if (!previewNode) {
     throw new Error("A preview node is required to create an export node");
   }
 
-  const upserted = upsertExportNode(project.canvas, previewNode);
+  const defaultFrameRange = sceneFrameRangeForPreviewNode(project.canvas, project.spec, previewNode);
+  const upserted = upsertExportNode(project.canvas, previewNode, defaultFrameRange);
   updateVideoProject(project.id, { canvas: upserted.canvas });
 
   return {
@@ -845,6 +1140,20 @@ async function createExportNode(job: Job) {
     exportNodeId: upserted.node.id,
     nodeId: upserted.node.id,
     previewNodeId: previewNode.id
+  };
+}
+
+async function createProjectExportNode(job: Job) {
+  const project = requireProject(job.projectId);
+  const upserted = upsertProjectExportNode(project.canvas);
+
+  updateVideoProject(project.id, { canvas: upserted.canvas });
+
+  return {
+    provider: "local-canvas-node-factory",
+    usedMock: false,
+    exportNodeId: upserted.node.id,
+    nodeId: upserted.node.id
   };
 }
 
@@ -859,9 +1168,12 @@ async function exportVisualAsset(job: Job) {
   }
 
   const assetPath = path.join(getProjectAssetDir(project.id), `${job.id}.svg`);
-  const title = stringData(visualNode, "title") ?? (visualNode.kind === "d3" ? "D3 Diagram" : "Three Scene");
+  const title =
+    stringData(visualNode, "title") ?? (visualNode.kind === "d3" ? "D3 Diagram" : "Three Scene");
   const svg =
-    visualNode.kind === "d3" ? renderD3VisualAssetSvg(visualNode, title) : renderThreeVisualAssetSvg(visualNode, title);
+    visualNode.kind === "d3"
+      ? renderD3VisualAssetSvg(visualNode, title)
+      : renderThreeVisualAssetSvg(visualNode, title);
 
   await fs.mkdir(path.dirname(assetPath), { recursive: true });
   await fs.writeFile(assetPath, svg, "utf8");
@@ -913,14 +1225,22 @@ async function exportVisualAsset(job: Job) {
 }
 
 async function renderProjectMedia(job: Job) {
-  const project = requireProject(job.projectId);
+  let project = requireProject(job.projectId);
+  const refreshedCanvas = await refreshAudioDurationsForRender(project.canvas);
+
+  if (refreshedCanvas !== project.canvas) {
+    project = updateVideoProject(project.id, { canvas: refreshedCanvas }) ?? project;
+  }
+
   const renderStill = job.type === "render-preview";
   const extension = renderStill ? "png" : "mp4";
   const assetDir = getProjectAssetDir(project.id);
   const outputPath = path.join(assetDir, `${job.id}.${extension}`);
   const specPath = path.join(assetDir, `${job.id}.spec.json`);
   const assetOrigin =
-    stringInput(job.input.assetOrigin) ?? process.env.ZEROFLOW_ASSET_ORIGIN ?? "http://localhost:3000";
+    stringInput(job.input.assetOrigin) ??
+    process.env.ZEROFLOW_ASSET_ORIGIN ??
+    "http://localhost:3000";
   const frame = numberInput(job.input.frame);
   const frameRange = stringInput(job.input.frameRange);
   const targetNode = resolveRenderJobTargetNode(project.canvas, renderStill, job.canvasNodeId);
@@ -929,14 +1249,29 @@ async function renderProjectMedia(job: Job) {
 
   await fs.mkdir(assetDir, { recursive: true });
   await fs.writeFile(specPath, JSON.stringify(renderSpec, null, 2), "utf8");
-  await runRemotionRender({
-    assetOrigin,
-    frame,
-    frameRange,
-    outputPath,
-    renderStill,
-    specPath
-  });
+
+  const fastConcat = !renderStill
+    ? await tryRenderProjectVideoFromSceneExports({
+        assetDir,
+        canvas: project.canvas,
+        jobId: job.id,
+        outputPath,
+        renderTarget,
+        spec: renderSpec
+      })
+    : undefined;
+  const renderMethod = fastConcat?.rendered ? "ffmpeg-concat" : "remotion-render";
+
+  if (!fastConcat?.rendered) {
+    await runRemotionRender({
+      assetOrigin,
+      frame,
+      frameRange,
+      outputPath,
+      renderStill,
+      specPath
+    });
+  }
 
   const renderedAt = new Date().toISOString();
   const asset = createProjectAsset({
@@ -952,6 +1287,9 @@ async function renderProjectMedia(job: Job) {
       frame: frame ?? null,
       frameRange: frameRange ?? null,
       renderScope: renderTarget.renderScope,
+      renderMethod,
+      concatFallbackReason: fastConcat?.fallbackReason ?? null,
+      concatSegments: fastConcat?.segments ?? [],
       sourceSceneId: renderTarget.sceneNode?.refId ?? renderTarget.sceneNode?.id ?? null,
       sourceCompositionNodeId: renderTarget.compositionNode?.id ?? null,
       sourcePreviewNodeId: renderTarget.previewNode?.id ?? null,
@@ -996,6 +1334,9 @@ async function renderProjectMedia(job: Job) {
     frame: frame ?? null,
     frameRange: frameRange ?? null,
     renderScope: renderTarget.renderScope,
+    renderMethod,
+    concatFallbackReason: fastConcat?.fallbackReason ?? null,
+    concatSegments: fastConcat?.segments ?? [],
     sourceSceneId: renderTarget.sceneNode?.refId ?? renderTarget.sceneNode?.id ?? null,
     sourceCompositionNodeId: renderTarget.compositionNode?.id ?? null,
     previewNodeId: renderStill ? targetNode?.id : undefined,
@@ -1034,14 +1375,14 @@ function resolveRenderMediaTarget(
     targetNode?.kind === "preview"
       ? targetNode
       : exportNode
-        ? findNodeById(canvas, stringData(exportNode, "sourcePreviewNodeId")) ?? findNode(canvas, "preview")
+        ? findNodeById(canvas, stringData(exportNode, "sourcePreviewNodeId"))
         : undefined;
   const directCompositionNode = targetNode?.kind === "composition" ? targetNode : undefined;
   const compositionNode =
     directCompositionNode ??
     (previewNode
-      ? findNodeById(canvas, stringData(previewNode, "sourceCompositionNodeId")) ??
-        findNode(canvas, "composition")
+      ? (findNodeById(canvas, stringData(previewNode, "sourceCompositionNodeId")) ??
+        findNode(canvas, "composition"))
       : undefined);
   const directSceneNode = targetNode?.kind === "scene" ? targetNode : undefined;
   const sceneNode = directSceneNode ?? resolveSceneNodeForComposition(canvas, compositionNode);
@@ -1128,6 +1469,244 @@ function specForScene(spec: AstroVideoSpec, sceneId: string): AstroVideoSpec | u
   };
 }
 
+type SceneExportSegment = {
+  assetPath: string;
+  durationSec: number;
+  exportNodeId: string;
+  sceneDurationSec: number;
+  sceneId: string;
+};
+
+type FastConcatResult = {
+  fallbackReason?: string;
+  rendered: boolean;
+  segments: SceneExportSegment[];
+};
+
+async function tryRenderProjectVideoFromSceneExports(input: {
+  assetDir: string;
+  canvas: CanvasDocument;
+  jobId: string;
+  outputPath: string;
+  renderTarget: RenderMediaTarget;
+  spec: AstroVideoSpec;
+}): Promise<FastConcatResult | undefined> {
+  if (!isFullProjectExportTarget(input.renderTarget)) {
+    return undefined;
+  }
+
+  const segments = await resolveSceneExportSegments(input.canvas, input.spec);
+
+  if (!segments.ok) {
+    return {
+      rendered: false,
+      fallbackReason: segments.reason,
+      segments: segments.segments
+    };
+  }
+
+  const [singleSegment] = segments.segments;
+
+  if (segments.segments.length === 1 && singleSegment) {
+    await fs.copyFile(singleSegment.assetPath, input.outputPath);
+    return {
+      rendered: true,
+      segments: segments.segments
+    };
+  }
+
+  const concatListPath = path.join(input.assetDir, `${input.jobId}.concat.txt`);
+  const concatList = segments.segments
+    .map((segment) => `file '${toFfmpegConcatPath(segment.assetPath)}'`)
+    .join("\n");
+
+  await fs.writeFile(concatListPath, `${concatList}\n`, "utf8");
+
+  try {
+    await runFfmpegConcat(concatListPath, input.outputPath, false);
+  } catch {
+    try {
+      await runFfmpegConcat(concatListPath, input.outputPath, true);
+    } catch (error) {
+      return {
+        rendered: false,
+        fallbackReason:
+          error instanceof Error
+            ? `ffmpeg concat failed: ${error.message}`
+            : "ffmpeg concat failed",
+        segments: segments.segments
+      };
+    }
+  }
+
+  return {
+    rendered: true,
+    segments: segments.segments
+  };
+}
+
+function isFullProjectExportTarget(target: RenderMediaTarget) {
+  return (
+    target.targetNode?.kind === "export" &&
+    target.exportNode?.kind === "export" &&
+    stringData(target.exportNode, "exportScope") === "full" &&
+    !stringData(target.exportNode, "sourcePreviewNodeId") &&
+    target.renderScope === "project"
+  );
+}
+
+async function resolveSceneExportSegments(
+  canvas: CanvasDocument,
+  spec: AstroVideoSpec
+): Promise<
+  | { ok: true; segments: SceneExportSegment[] }
+  | { ok: false; reason: string; segments: SceneExportSegment[] }
+> {
+  if (spec.scenes.length === 0) {
+    return { ok: false, reason: "project spec has no scenes", segments: [] };
+  }
+
+  if (spec.audio?.tracks.some((track) => track.kind !== "narration")) {
+    return {
+      ok: false,
+      reason: "project has global non-narration audio tracks",
+      segments: []
+    };
+  }
+
+  const segments: SceneExportSegment[] = [];
+
+  for (const scene of spec.scenes) {
+    const segment = await resolveSceneExportSegment(canvas, spec, scene);
+
+    if (!segment.ok) {
+      return {
+        ok: false,
+        reason: segment.reason,
+        segments
+      };
+    }
+
+    segments.push(segment.segment);
+  }
+
+  return { ok: true, segments };
+}
+
+async function resolveSceneExportSegment(
+  canvas: CanvasDocument,
+  spec: AstroVideoSpec,
+  scene: SceneSpec
+): Promise<{ ok: true; segment: SceneExportSegment } | { ok: false; reason: string }> {
+  const sceneNode = findSceneNodeForSceneSpec(canvas, scene);
+
+  if (!sceneNode) {
+    return { ok: false, reason: `missing scene node for ${scene.id}` };
+  }
+
+  const compositionNode = findCompositionNodeForSceneNode(canvas, sceneNode, scene.id);
+
+  if (!compositionNode) {
+    return { ok: false, reason: `missing composition node for ${scene.id}` };
+  }
+
+  const previewNode = canvas.nodes.find(
+    (node) => node.kind === "preview" && node.data.sourceCompositionNodeId === compositionNode.id
+  );
+
+  if (!previewNode) {
+    return { ok: false, reason: `missing preview node for ${scene.id}` };
+  }
+
+  const exportNode = canvas.nodes.find(
+    (node) => node.kind === "export" && node.data.sourcePreviewNodeId === previewNode.id
+  );
+  const assetPath = stringData(exportNode, "assetPath");
+
+  if (!exportNode || !assetPath) {
+    return { ok: false, reason: `missing rendered scene export for ${scene.id}` };
+  }
+
+  if (!(await pathExists(assetPath))) {
+    return { ok: false, reason: `scene export file is missing for ${scene.id}` };
+  }
+
+  const videoMetadata = await probeVideoMetadata(assetPath);
+  const durationSec = videoMetadata?.durationSec;
+
+  if (!durationSec) {
+    return { ok: false, reason: `could not probe scene export duration for ${scene.id}` };
+  }
+
+  const expectedSize = getExpectedVideoSize(spec.format);
+
+  if (
+    videoMetadata.width < expectedSize.width ||
+    videoMetadata.height < expectedSize.height
+  ) {
+    return {
+      ok: false,
+      reason: `scene export resolution is too low for ${scene.id}`
+    };
+  }
+
+  if (durationSec + 0.35 < scene.durationSec) {
+    return {
+      ok: false,
+      reason: `scene export is shorter than scene duration for ${scene.id}`,
+    };
+  }
+
+  return {
+    ok: true,
+    segment: {
+      assetPath,
+      durationSec: roundSec(durationSec),
+      exportNodeId: exportNode.id,
+      sceneDurationSec: roundSec(scene.durationSec),
+      sceneId: scene.id
+    }
+  };
+}
+
+function findSceneNodeForSceneSpec(canvas: CanvasDocument, scene: SceneSpec) {
+  return (
+    canvas.nodes.find((node) => node.kind === "scene" && node.refId === scene.id) ??
+    canvas.nodes.find((node) => node.kind === "scene" && node.data.sceneId === scene.id)
+  );
+}
+
+function findCompositionNodeForSceneNode(
+  canvas: CanvasDocument,
+  sceneNode: CanvasNode,
+  sceneId: string
+) {
+  return canvas.nodes.find(
+    (node) =>
+      node.kind === "composition" &&
+      (node.data.sourceSceneNodeId === sceneNode.id || node.data.sceneId === sceneId)
+  );
+}
+
+function sceneFrameRangeForPreviewNode(
+  canvas: CanvasDocument,
+  spec: AstroVideoSpec,
+  previewNode: CanvasNode
+) {
+  const compositionNode = findNodeById(canvas, stringData(previewNode, "sourceCompositionNodeId"));
+  const sceneNode = resolveSceneNodeForComposition(canvas, compositionNode);
+  const sceneId = sceneNode?.refId ?? sceneNode?.id ?? stringData(compositionNode, "sceneId");
+  const scene = sceneId ? spec.scenes.find((item) => item.id === sceneId) : undefined;
+  const durationSec =
+    scene?.durationSec ??
+    numberData(compositionNode, "durationSec") ??
+    numberData(sceneNode, "durationSec") ??
+    2;
+  const fps = spec.fps || 30;
+
+  return `0:${Math.max(1, Math.ceil(durationSec * fps))}`;
+}
+
 function findNodeById(canvas: CanvasDocument, nodeId: string | undefined) {
   return nodeId ? canvas.nodes.find((node) => node.id === nodeId) : undefined;
 }
@@ -1197,8 +1776,15 @@ async function alignCaptions(job: Job) {
     return alignSceneCaption(job, project, sourceNode);
   }
 
-  const ttsManifest = await readTtsManifestCues(findTtsManifestPath(project.canvas, job));
-  const captions = buildCaptionAlignment(project.spec.scenes, ttsManifest?.cues);
+  const globalTtsManifest = await readTtsManifestCues(stringInput(job.input.manifestPath));
+  const captionSources = await resolveCaptionSceneSources(project.canvas, project.spec.scenes, job);
+  const captions = buildCaptionAlignment(
+    project.spec.scenes,
+    captionSources,
+    globalTtsManifest?.cues
+  );
+  const alignmentSource = summarizeCaptionAlignmentSource(captionSources, globalTtsManifest);
+  const manifestPaths = captionSourceManifestPaths(captionSources, globalTtsManifest);
   const subtitlePath = path.join(getProjectAssetDir(project.id), `${job.id}.captions.json`);
 
   await fs.mkdir(path.dirname(subtitlePath), { recursive: true });
@@ -1216,8 +1802,9 @@ async function alignCaptions(job: Job) {
     path: subtitlePath,
     metadata: {
       provider: "local-caption-aligner",
-      alignmentSource: ttsManifest ? ttsManifest.source : "estimated-scene-duration",
-      manifestPath: ttsManifest?.manifestPath,
+      alignmentSource,
+      manifestPath: manifestPaths[0],
+      manifestPaths,
       sceneCount: captions.length,
       cueCount: captions.reduce((total, caption) => total + caption.cues.length, 0)
     }
@@ -1231,46 +1818,68 @@ async function alignCaptions(job: Job) {
     canvasNodeId: job.canvasNodeId
   });
 
-  const canvas = applyCaptionAlignment(project.canvas, captions, asset.id, assetUrl);
+  const latestProject = getVideoProject(project.id);
+  const canvas = applyCaptionAlignment(
+    latestProject?.canvas ?? project.canvas,
+    captions,
+    asset.id,
+    assetUrl
+  );
   updateVideoProject(project.id, { canvas });
 
   return {
     provider: "local-caption-aligner",
     usedMock: false,
-    alignmentSource: ttsManifest ? ttsManifest.source : "estimated-scene-duration",
-    manifestPath: ttsManifest?.manifestPath,
+    alignmentSource,
+    manifestPath: manifestPaths[0],
+    manifestPaths,
     assetId: asset.id,
     assetPath: subtitlePath,
     assetUrl,
-    captionNodeIds: captions.map((caption) => `node-caption-align-${safeId(caption.sceneId)}`),
+    captionNodeIds: captions.map((caption) => caption.captionNodeId),
     captions
   };
 }
 
-async function alignSceneCaption(job: Job, project: ReturnType<typeof requireProject>, sceneNode: CanvasNode) {
+async function alignSceneCaption(
+  job: Job,
+  project: ReturnType<typeof requireProject>,
+  sceneNode: CanvasNode
+) {
   const sceneId = sceneNode.refId ?? sceneNode.id;
-  const text =
-    stringInput(job.input.text) ??
-    stringData(sceneNode, "caption") ??
-    stringData(sceneNode, "narration") ??
-    stringData(sceneNode, "description") ??
-    " ";
-  const durationSec = numberInput(job.input.durationSec) ?? numberData(sceneNode, "durationSec") ?? 6;
   const sceneIndex = project.canvas.nodes
     .filter((node) => node.kind === "scene")
     .sort((left, right) => left.position.y - right.position.y || left.position.x - right.position.x)
     .findIndex((node) => node.id === sceneNode.id);
-  const cues = distributeCaptionCues(sceneId, text, durationSec);
+  const sceneSpec = project.spec.scenes.find((scene) => scene.id === sceneId);
+  const captionSource = await resolveCaptionSourceForScene(
+    project.canvas,
+    sceneNode,
+    sceneSpec,
+    job
+  );
+  const durationSec =
+    numberInput(job.input.durationSec) ?? captionSource.durationSec;
+  const cues =
+    captionSource.manifest?.cues.length
+      ? normalizeManifestCuesToScene(sceneId, captionSource.manifest.cues, durationSec)
+      : distributeCaptionCues(sceneId, captionSource.text, durationSec);
+  const energySource = captionSource.manifest?.cues.length ? "tts-manifest" : "cue-derived";
   const caption: AlignedCaption = {
     sceneId,
+    captionNodeId: `node-caption-align-${safeId(sceneId)}`,
     index: Math.max(0, sceneIndex),
-    text,
+    text: captionSource.text,
     startSec: 0,
     durationSec,
     cues,
+    textSource: captionSource.source,
+    voiceNodeId: captionSource.voiceNodeId,
+    manifestPath: captionSource.manifestPath,
+    audioPath: captionSource.audioPath,
     audioEnergy: {
-      source: "cue-derived",
-      bars: captionEnergyBarsFromCues(cues, "cue-derived")
+      source: energySource,
+      bars: captionEnergyBarsFromCues(cues, energySource)
     }
   };
   const subtitlePath = path.join(getProjectAssetDir(project.id), `${job.id}.captions.json`);
@@ -1290,14 +1899,20 @@ async function alignSceneCaption(job: Job, project: ReturnType<typeof requirePro
     path: subtitlePath,
     metadata: {
       provider: "local-caption-aligner",
-      alignmentSource: "single-scene-estimate",
+      alignmentSource: captionAlignmentSourceLabel(captionSource),
+      manifestPath: captionSource.manifestPath,
+      voiceNodeId: captionSource.voiceNodeId,
       sceneId,
       cueCount: caption.cues.length
     }
   });
   const assetUrl = `/api/project-asset?assetId=${encodeURIComponent(asset.id)}`;
+  const latestProject = getVideoProject(project.id);
+  const latestCanvas = latestProject?.canvas ?? project.canvas;
+  const latestSceneNode =
+    latestCanvas.nodes.find((node) => node.id === sceneNode.id) ?? sceneNode;
   const captionNodeId =
-    findSceneResourceNode(project.canvas, sceneNode, "caption")?.id ??
+    findSceneResourceNode(latestCanvas, latestSceneNode, "caption")?.id ??
     `node-caption-align-${safeId(sceneId)}`;
 
   addProjectAssetRef(project.id, {
@@ -1307,7 +1922,7 @@ async function alignSceneCaption(job: Job, project: ReturnType<typeof requirePro
     canvasNodeId: captionNodeId
   });
 
-  const canvas = applyCaptionAlignment(project.canvas, [caption], asset.id, assetUrl, {
+  const canvas = applyCaptionAlignment(latestCanvas, [caption], asset.id, assetUrl, {
     pruneMissing: false
   });
   updateVideoProject(project.id, { canvas });
@@ -1315,7 +1930,8 @@ async function alignSceneCaption(job: Job, project: ReturnType<typeof requirePro
   return {
     provider: "local-caption-aligner",
     usedMock: false,
-    alignmentSource: "single-scene-estimate",
+    alignmentSource: captionAlignmentSourceLabel(captionSource),
+    manifestPath: captionSource.manifestPath,
     assetId: asset.id,
     assetPath: subtitlePath,
     assetUrl,
@@ -1350,10 +1966,15 @@ async function promoteAssetToLibrary(job: Job) {
 
 type AlignedCaption = {
   sceneId: string;
+  captionNodeId: string;
   index: number;
   text: string;
   startSec: number;
   durationSec: number;
+  textSource: CaptionTextSource;
+  voiceNodeId?: string;
+  manifestPath?: string;
+  audioPath?: string;
   cues: Array<{
     id: string;
     text: string;
@@ -1364,6 +1985,25 @@ type AlignedCaption = {
     source: "tts-manifest" | "cue-derived";
     bars: AudioEnergyBar[];
   };
+};
+
+type CaptionTextSource =
+  | "job-input"
+  | "voice-manifest"
+  | "voice-text"
+  | "scene-caption"
+  | "scene-narration"
+  | "scene-description";
+
+type CaptionSceneSource = {
+  sceneId: string;
+  text: string;
+  durationSec: number;
+  source: CaptionTextSource;
+  manifest?: TtsManifestCues;
+  manifestPath?: string;
+  audioPath?: string;
+  voiceNodeId?: string;
 };
 
 type AudioEnergyBar = {
@@ -1384,30 +2024,186 @@ type TtsManifestCues = {
   cues: TtsManifestCue[];
 };
 
-function buildCaptionAlignment(scenes: SceneSpec[], ttsCues: TtsManifestCue[] = []): AlignedCaption[] {
+async function resolveCaptionSceneSources(
+  canvas: CanvasDocument,
+  scenes: SceneSpec[],
+  job: Job
+) {
+  return Promise.all(
+    scenes.map((scene) => {
+      const sceneNode = findSceneNodeForSpec(canvas, scene);
+
+      return sceneNode
+        ? resolveCaptionSourceForScene(canvas, sceneNode, scene, job)
+        : resolveCaptionSourceForSpec(scene);
+    })
+  );
+}
+
+async function resolveCaptionSourceForScene(
+  canvas: CanvasDocument,
+  sceneNode: CanvasNode,
+  scene: SceneSpec | undefined,
+  job?: Job
+): Promise<CaptionSceneSource> {
+  const sceneId = sceneNode.refId ?? sceneNode.id;
+  const voiceNode = findSceneResourceNode(canvas, sceneNode, "voice");
+  const manifestPath = stringData(voiceNode, "manifestPath");
+  const manifest = await readTtsManifestCues(manifestPath);
+  const manifestText = manifest ? joinTtsCueText(manifest.cues) : undefined;
+  const voiceText =
+    stringData(voiceNode, "text") ??
+    stringData(voiceNode, "narration") ??
+    stringData(voiceNode, "description");
+  const sceneNarration = stringData(sceneNode, "narration") ?? scene?.narration;
+  const sceneCaption = stringData(sceneNode, "caption") ?? scene?.caption?.text;
+  const sceneDescription = stringData(sceneNode, "description") ?? scene?.title ?? " ";
+  const explicitText = job ? stringInput(job.input.text) : undefined;
+  const audioPath = stringData(voiceNode, "assetPath");
+  const text = manifestText ?? voiceText ?? explicitText ?? sceneNarration ?? sceneCaption ?? sceneDescription;
+  const source: CaptionTextSource = manifestText
+    ? "voice-manifest"
+    : voiceText
+      ? "voice-text"
+      : explicitText
+        ? "job-input"
+        : sceneNarration
+          ? "scene-narration"
+          : sceneCaption
+            ? "scene-caption"
+            : "scene-description";
+  const manifestDurationSec = totalTtsCuesDuration(manifest?.cues);
+  const probedAudioDurationSec = audioPath ? await probeAudioDurationSec(audioPath) : undefined;
+  const durationSec =
+    maxDurationSec(
+      manifestDurationSec,
+      numberData(voiceNode, "audioDurationSec"),
+      probedAudioDurationSec,
+      numberData(voiceNode, "durationSec"),
+      numberInput(job?.input.durationSec),
+      scene?.durationSec,
+      numberData(sceneNode, "durationSec")
+    ) ?? 6;
+
+  return {
+    sceneId,
+    text,
+    durationSec,
+    source,
+    manifest,
+    manifestPath,
+    audioPath,
+    voiceNodeId: voiceNode?.id
+  };
+}
+
+function resolveCaptionSourceForSpec(scene: SceneSpec): CaptionSceneSource {
+  return {
+    sceneId: scene.id,
+    text: scene.narration || scene.caption?.text || scene.title || " ",
+    durationSec: scene.durationSec,
+    source: scene.narration ? "scene-narration" : "scene-caption"
+  };
+}
+
+function findSceneNodeForSpec(canvas: CanvasDocument, scene: SceneSpec) {
+  return (
+    canvas.nodes.find((node) => node.kind === "scene" && node.refId === scene.id) ??
+    canvas.nodes.find((node) => node.kind === "scene" && node.data.sceneId === scene.id)
+  );
+}
+
+function summarizeCaptionAlignmentSource(
+  sources: CaptionSceneSource[],
+  globalManifest: TtsManifestCues | undefined
+) {
+  if (sources.some((source) => source.manifest?.cues.length)) {
+    return "voice-tts-manifest";
+  }
+
+  if (globalManifest) {
+    return "global-tts-manifest";
+  }
+
+  if (sources.some((source) => source.source === "voice-text")) {
+    return "voice-text-estimate";
+  }
+
+  if (sources.some((source) => source.source === "scene-narration")) {
+    return "scene-narration-estimate";
+  }
+
+  return "estimated-scene-duration";
+}
+
+function captionAlignmentSourceLabel(source: CaptionSceneSource) {
+  if (source.manifest?.cues.length) {
+    return "voice-tts-manifest";
+  }
+
+  if (source.source === "voice-text") {
+    return "voice-text-estimate";
+  }
+
+  if (source.source === "job-input") {
+    return "job-input";
+  }
+
+  if (source.source === "scene-narration") {
+    return "scene-narration-estimate";
+  }
+
+  return "estimated-scene-duration";
+}
+
+function captionSourceManifestPaths(
+  sources: CaptionSceneSource[],
+  globalManifest: TtsManifestCues | undefined
+) {
+  return Array.from(
+    new Set(
+      sources
+        .map((source) => source.manifestPath)
+        .concat(globalManifest?.manifestPath)
+        .filter((manifestPath): manifestPath is string => Boolean(manifestPath))
+    )
+  );
+}
+
+function buildCaptionAlignment(
+  scenes: SceneSpec[],
+  captionSources: CaptionSceneSource[] = [],
+  globalTtsCues: TtsManifestCue[] = []
+): AlignedCaption[] {
   let cursor = 0;
   let ttsCursor = 0;
+  const sourceBySceneId = new Map(captionSources.map((source) => [source.sceneId, source]));
 
   return scenes.map((scene, index) => {
-    const text = scene.caption?.text ?? scene.narration;
-    const manifestSlice = takeManifestCuesForScene(
-      ttsCues,
-      ttsCursor,
-      scene,
-      index,
-      scenes.length
-    );
+    const source = sourceBySceneId.get(scene.id);
+    const text = source?.text ?? scene.caption?.text ?? scene.narration;
+    const durationSec = source?.durationSec ?? scene.durationSec;
+    const sourceManifestCues = source?.manifest?.cues ?? [];
+    const manifestSlice =
+      sourceManifestCues.length > 0
+        ? { cues: sourceManifestCues, nextIndex: ttsCursor }
+        : takeManifestCuesForScene(globalTtsCues, ttsCursor, scene, index, scenes.length, text);
     const cues =
       manifestSlice.cues.length > 0
-        ? normalizeManifestCuesToScene(scene.id, manifestSlice.cues, scene.durationSec)
-        : distributeCaptionCues(scene.id, text, scene.durationSec);
+        ? normalizeManifestCuesToScene(scene.id, manifestSlice.cues, durationSec)
+        : distributeCaptionCues(scene.id, text, durationSec);
     const energySource = manifestSlice.cues.length > 0 ? "tts-manifest" : "cue-derived";
     const caption: AlignedCaption = {
       sceneId: scene.id,
+      captionNodeId: `node-caption-align-${safeId(scene.id)}`,
       index,
       text,
       startSec: roundSec(cursor),
-      durationSec: scene.durationSec,
+      durationSec,
+      textSource: source?.source ?? (scene.caption?.text ? "scene-caption" : "scene-narration"),
+      voiceNodeId: source?.voiceNodeId,
+      manifestPath: source?.manifestPath,
+      audioPath: source?.audioPath,
       cues,
       audioEnergy: {
         source: energySource,
@@ -1415,7 +2211,7 @@ function buildCaptionAlignment(scenes: SceneSpec[], ttsCues: TtsManifestCue[] = 
       }
     };
 
-    cursor += scene.durationSec;
+    cursor += durationSec;
     ttsCursor = manifestSlice.nextIndex;
     return caption;
   });
@@ -1435,7 +2231,9 @@ function captionEnergyBarsFromCues(
     return {
       startSec: roundSec(cue.startSec),
       durationSec: roundSec(cue.durationSec),
-      amplitude: roundSec(Math.min(1, Math.max(0.08, 0.28 + textWeight * 0.48 + cadence + sourceBoost)))
+      amplitude: roundSec(
+        Math.min(1, Math.max(0.08, 0.28 + textWeight * 0.48 + cadence + sourceBoost))
+      )
     };
   });
 }
@@ -1445,7 +2243,8 @@ function takeManifestCuesForScene(
   startIndex: number,
   scene: SceneSpec,
   sceneIndex: number,
-  sceneCount: number
+  sceneCount: number,
+  targetText = scene.narration
 ) {
   if (startIndex >= ttsCues.length) {
     return { cues: [], nextIndex: startIndex };
@@ -1453,12 +2252,15 @@ function takeManifestCuesForScene(
 
   const remainingScenes = sceneCount - sceneIndex;
   const maxEndIndex = Math.max(startIndex + 1, ttsCues.length - (remainingScenes - 1));
-  const targetLength = Math.max(1, normalizeCaptionText(scene.narration).length);
+  const targetLength = Math.max(1, normalizeCaptionText(targetText).length);
   const selected: TtsManifestCue[] = [];
   let cursor = startIndex;
   let accumulatedLength = 0;
 
-  while (cursor < maxEndIndex && (selected.length === 0 || accumulatedLength < targetLength * 0.78)) {
+  while (
+    cursor < maxEndIndex &&
+    (selected.length === 0 || accumulatedLength < targetLength * 0.78)
+  ) {
     const cue = ttsCues[cursor];
     if (!cue) {
       break;
@@ -1483,11 +2285,7 @@ function normalizeManifestCuesToScene(
   const totalDuration = cues.reduce((sum, cue) => sum + cue.durationSec, 0);
 
   if (totalDuration <= 0) {
-    return distributeCaptionCues(
-      sceneId,
-      cues.map((cue) => cue.text).join(""),
-      durationSec
-    );
+    return distributeCaptionCues(sceneId, cues.map((cue) => cue.text).join(""), durationSec);
   }
 
   let cursor = 0;
@@ -1566,17 +2364,30 @@ function splitLongCaptionChunk(chunk: string, maxLength: number) {
   return parts;
 }
 
-function findTtsManifestPath(canvas: CanvasDocument, job: Job) {
-  const inputPath = stringInput(job.input.manifestPath);
-  if (inputPath) {
-    return inputPath;
-  }
+function joinTtsCueText(cues: TtsManifestCue[]) {
+  const text = cues
+    .map((cue) => cue.text.trim())
+    .filter(Boolean)
+    .join("");
 
-  const voiceNode = findNode(canvas, "voice");
-  return stringData(voiceNode, "manifestPath");
+  return text.replace(/\s+/g, " ").trim() || undefined;
 }
 
-async function readTtsManifestCues(manifestPath: string | undefined): Promise<TtsManifestCues | undefined> {
+function totalTtsCuesDuration(cues: TtsManifestCue[] | undefined) {
+  if (!cues || cues.length === 0) {
+    return undefined;
+  }
+
+  const durationSec = cues.reduce(
+    (total, cue) => Math.max(total, (cue.startSec ?? 0) + cue.durationSec),
+    0
+  );
+  return durationSec > 0 ? roundSec(durationSec) : undefined;
+}
+
+async function readTtsManifestCues(
+  manifestPath: string | undefined
+): Promise<TtsManifestCues | undefined> {
   if (!manifestPath) {
     return undefined;
   }
@@ -1590,7 +2401,9 @@ async function readTtsManifestCues(manifestPath: string | undefined): Promise<Tt
         ? manifest.segments
         : [];
     const parsed = await Promise.all(chunks.map((chunk) => readTtsManifestCue(chunk)));
-    const cues = parsed.filter((cue): cue is TtsManifestCue => Boolean(cue));
+    const cues = parsed
+      .filter((cue): cue is TtsManifestCue => Boolean(cue))
+      .flatMap((cue) => expandTtsCueBySentences(cue));
 
     if (cues.length === 0) {
       return undefined;
@@ -1599,9 +2412,7 @@ async function readTtsManifestCues(manifestPath: string | undefined): Promise<Tt
     let cursor = 0;
     const normalized = cues.map((cue) => {
       const startSec =
-        typeof cue.startSec === "number" && Number.isFinite(cue.startSec)
-          ? cue.startSec
-          : cursor;
+        typeof cue.startSec === "number" && Number.isFinite(cue.startSec) ? cue.startSec : cursor;
       const next = {
         ...cue,
         startSec: roundSec(startSec),
@@ -1655,7 +2466,141 @@ async function readTtsManifestCue(value: unknown): Promise<TtsManifestCue | unde
   };
 }
 
+function expandTtsCueBySentences(cue: TtsManifestCue): TtsManifestCue[] {
+  const chunks = splitCaptionText(cue.text);
+
+  if (chunks.length <= 1) {
+    return [cue];
+  }
+
+  const totalWeight = chunks.reduce((sum, chunk) => sum + Math.max(1, chunk.length), 0);
+  let cursor = 0;
+
+  return chunks.map((chunk, index) => {
+    const isLast = index === chunks.length - 1;
+    const remaining = Math.max(0.05, cue.durationSec - cursor);
+    const duration = isLast
+      ? remaining
+      : Math.min(remaining, Math.max(0.05, (cue.durationSec * Math.max(1, chunk.length)) / totalWeight));
+    const startSec = cue.startSec === undefined ? undefined : cue.startSec + cursor;
+
+    cursor += duration;
+
+    return {
+      text: chunk,
+      startSec,
+      durationSec: duration
+    };
+  });
+}
+
+async function refreshAudioDurationsForRender(canvas: CanvasDocument) {
+  let changed = false;
+  const nodes = await Promise.all(
+    canvas.nodes.map(async (node) => {
+      if (node.kind !== "voice") {
+        return node;
+      }
+
+      const assetPath = stringData(node, "assetPath");
+      const actualDurationSec = assetPath ? await probeAudioDurationSec(assetPath) : undefined;
+      const currentAudioDurationSec = numberData(node, "audioDurationSec") ?? 0;
+      const currentDurationSec = numberData(node, "durationSec") ?? 0;
+
+      if (!actualDurationSec || actualDurationSec <= currentAudioDurationSec + 0.05) {
+        return node;
+      }
+
+      changed = true;
+      const durationSec = roundSec(actualDurationSec);
+
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          audioDurationSec: durationSec,
+          durationSec: Math.max(currentDurationSec, durationSec)
+        }
+      };
+    })
+  );
+
+  return changed ? { ...canvas, nodes } : canvas;
+}
+
 function probeAudioDurationSec(audioPath: string) {
+  return probeMediaDurationSec(audioPath);
+}
+
+function probeVideoMetadata(videoPath: string) {
+  return new Promise<{ durationSec: number; height: number; width: number } | undefined>(
+    (resolve) => {
+      const child = spawn(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "v:0",
+          "-show_entries",
+          "stream=width,height:format=duration",
+          "-of",
+          "json",
+          videoPath
+        ],
+        { shell: false }
+      );
+      let stdout = "";
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += String(chunk);
+      });
+      child.on("error", () => resolve(undefined));
+      child.on("close", () => {
+        try {
+          const metadata = JSON.parse(stdout) as {
+            format?: { duration?: unknown };
+            streams?: Array<{ height?: unknown; width?: unknown }>;
+          };
+          const stream = metadata.streams?.[0];
+          const durationSec = Number(metadata.format?.duration);
+          const width = Number(stream?.width);
+          const height = Number(stream?.height);
+
+          if (
+            Number.isFinite(durationSec) &&
+            durationSec > 0 &&
+            Number.isFinite(width) &&
+            width > 0 &&
+            Number.isFinite(height) &&
+            height > 0
+          ) {
+            resolve({ durationSec, height, width });
+            return;
+          }
+        } catch {
+          // Fall through to undefined.
+        }
+
+        resolve(undefined);
+      });
+    }
+  );
+}
+
+function getExpectedVideoSize(format: AstroVideoSpec["format"]) {
+  if (format === "landscape") {
+    return { height: 1080, width: 1920 };
+  }
+
+  if (format === "square") {
+    return { height: 1080, width: 1080 };
+  }
+
+  return { height: 1920, width: 1080 };
+}
+
+function probeMediaDurationSec(mediaPath: string) {
   return new Promise<number | undefined>((resolve) => {
     const child = spawn(
       "ffprobe",
@@ -1666,7 +2611,7 @@ function probeAudioDurationSec(audioPath: string) {
         "format=duration",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-        audioPath
+        mediaPath
       ],
       { shell: false }
     );
@@ -1681,6 +2626,56 @@ function probeAudioDurationSec(audioPath: string) {
       resolve(Number.isFinite(duration) && duration > 0 ? duration : undefined);
     });
   });
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runFfmpegConcat(listPath: string, outputPath: string, reencode: boolean) {
+  const args = [
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    listPath,
+    ...(reencode
+      ? ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart"]
+      : ["-c", "copy"]),
+    outputPath
+  ];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("ffmpeg", args, {
+      env: process.env,
+      windowsHide: true
+    });
+    let stderr = "";
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.slice(-1600) || `ffmpeg exited with code ${code}`));
+    });
+  });
+}
+
+function toFfmpegConcatPath(filePath: string) {
+  return path.resolve(filePath).replaceAll("\\", "/").replaceAll("'", "'\\''");
 }
 
 function applyCaptionAlignment(
@@ -1721,7 +2716,7 @@ function applyCaptionAlignment(
     const nodeId =
       existingIndex === -1
         ? `node-caption-align-${safeId(caption.sceneId)}`
-        : nodes[existingIndex]?.id ?? `node-caption-align-${safeId(caption.sceneId)}`;
+        : (nodes[existingIndex]?.id ?? `node-caption-align-${safeId(caption.sceneId)}`);
     const baseNode = existingIndex === -1 ? undefined : nodes[existingIndex];
     const nextNode: CanvasNode = {
       id: nodeId,
@@ -1742,6 +2737,10 @@ function applyCaptionAlignment(
         sourceSceneNodeId: anchor?.id,
         startSec: caption.startSec,
         durationSec: caption.durationSec,
+        textSource: caption.textSource,
+        voiceNodeId: caption.voiceNodeId,
+        manifestPath: caption.manifestPath,
+        audioPath: caption.audioPath,
         cues: caption.cues,
         audioEnergy: caption.audioEnergy,
         assetId,
@@ -1760,7 +2759,10 @@ function applyCaptionAlignment(
       nodes = nodes.map((node, index) => (index === existingIndex ? nextNode : node));
     }
 
-    if (anchor && !edges.some((edge) => edge.toNodeId === nodeId && edge.fromNodeId === anchor.id)) {
+    if (
+      anchor &&
+      !edges.some((edge) => edge.toNodeId === nodeId && edge.fromNodeId === anchor.id)
+    ) {
       edges = [
         ...edges,
         {
@@ -1771,6 +2773,32 @@ function applyCaptionAlignment(
         }
       ];
     }
+
+    nodes = nodes.map((node) => {
+      if (
+        node.kind !== "composition" ||
+        !(
+          node.data.sceneId === caption.sceneId ||
+          (anchor && node.data.sourceSceneNodeId === anchor.id)
+        )
+      ) {
+        return node;
+      }
+
+      const currentDurationSec = numberData(node, "durationSec") ?? 0;
+
+      if (currentDurationSec >= caption.durationSec) {
+        return node;
+      }
+
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          durationSec: caption.durationSec
+        }
+      };
+    });
   }
 
   return {
@@ -1792,6 +2820,18 @@ function roundSec(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function maxDurationSec(...values: Array<number | undefined>) {
+  const finiteValues = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0
+  );
+
+  if (finiteValues.length === 0) {
+    return undefined;
+  }
+
+  return roundSec(Math.max(...finiteValues));
+}
+
 function safeId(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "-");
 }
@@ -1808,7 +2848,10 @@ function findNode(canvas: CanvasDocument, kind: CanvasNode["kind"]) {
   return canvas.nodes.find((node) => node.kind === kind);
 }
 
-type SceneResourceKind = Extract<CanvasNode["kind"], "caption" | "voice" | "chart" | "image" | "d3" | "three">;
+type SceneResourceKind = Extract<
+  CanvasNode["kind"],
+  "caption" | "voice" | "chart" | "image" | "d3" | "three"
+>;
 
 function findSceneResourceNode(
   canvas: CanvasDocument,
@@ -1918,7 +2961,12 @@ function sceneResourceDescription(sceneNode: CanvasNode) {
 
 function sceneD3ResourceData(job: Job, sceneNode: CanvasNode) {
   const title = stringInput(job.input.title) ?? `D3 ${sceneResourceTitle(sceneNode)}`;
-  const narration = stringInput(job.input.narration) ?? stringData(sceneNode, "narration") ?? sceneResourceDescription(sceneNode);
+  const narration =
+    stringInput(job.input.narration) ??
+    stringData(sceneNode, "narration") ??
+    sceneResourceDescription(sceneNode);
+  const diagram = normalizeD3Diagram(stringInput(job.input.diagram));
+  const visualPreset = stringInput(job.input.visualPreset) ?? diagram;
 
   return {
     generatedBy: "create-d3-node",
@@ -1926,28 +2974,189 @@ function sceneD3ResourceData(job: Job, sceneNode: CanvasNode) {
     description: stringInput(job.input.description) ?? sceneResourceDescription(sceneNode),
     narration,
     durationSec: numberInput(job.input.durationSec) ?? numberData(sceneNode, "durationSec") ?? 6,
-    visualPreset: stringInput(job.input.visualPreset) ?? "timeline",
-    diagram: stringInput(job.input.diagram) ?? "timeline",
+    visualPreset,
+    diagram,
     renderMode: "contract",
     dataJson:
       stringInput(job.input.dataJson) ??
-      JSON.stringify(
-        {
-          points: [
-            { label: "Concept", value: 1 },
-            { label: sceneResourceTitle(sceneNode), value: 2 },
-            { label: "Practice", value: 3 }
-          ]
-        },
-        null,
-        2
-      )
+      JSON.stringify(defaultD3ResourceData(diagram, sceneResourceTitle(sceneNode)), null, 2)
   };
+}
+
+function defaultD3ResourceData(diagram: ReturnType<typeof normalizeD3Diagram>, title: string) {
+  if (diagram === "relationship") {
+    return {
+      nodes: ["Concept", title, "Evidence", "Practice"],
+      links: [
+        ["Concept", title],
+        [title, "Evidence"],
+        [title, "Practice"]
+      ]
+    };
+  }
+
+  if (diagram === "tree") {
+    return {
+      root: title,
+      children: ["Concept", "Evidence", "Practice", "Takeaway"]
+    };
+  }
+
+  if (diagram === "distribution") {
+    return {
+      values: [
+        { label: "Concept", value: 34 },
+        { label: title, value: 42 },
+        { label: "Practice", value: 24 }
+      ]
+    };
+  }
+
+  return {
+    events: [
+      { label: "Concept", value: 0 },
+      { label: title, value: 1 },
+      { label: "Evidence", value: 2 },
+      { label: "Practice", value: 3 }
+    ]
+  };
+}
+
+function normalizeGeneratedD3Contract(
+  input: {
+    title?: string;
+    description?: string;
+    narration?: string;
+    diagram?: D3DiagramKind;
+    durationSec?: number;
+    data?: unknown;
+    dataJson?: string;
+  },
+  fallback: {
+    title: string;
+    description: string;
+    narration: string;
+    diagram: D3DiagramKind;
+    durationSec: number;
+  }
+) {
+  const diagram = normalizeD3Diagram(input.diagram ?? fallback.diagram);
+  const data =
+    normalizeD3Data(
+      diagram,
+      input.data ??
+        (typeof input.dataJson === "string" ? parseJsonValue(input.dataJson) : undefined)
+    ) ?? defaultD3ResourceData(diagram, fallback.title);
+
+  return {
+    title: compactUiText(input.title, fallback.title, 54),
+    description: compactUiText(input.description, fallback.description, 140),
+    narration: compactUiText(input.narration, fallback.narration, 260),
+    diagram,
+    durationSec: clampNumber(input.durationSec ?? fallback.durationSec, 1, 30),
+    dataJson: stableJson(data)
+  };
+}
+
+function normalizeD3Data(diagram: D3DiagramKind, value: unknown) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+  if (!record) {
+    return null;
+  }
+
+  if (diagram === "relationship") {
+    const nodes = Array.isArray(record.nodes)
+      ? record.nodes.flatMap((node) => (typeof node === "string" && node.trim() ? [node.trim()] : []))
+      : [];
+    const nodeSet = new Set(nodes);
+    const links = Array.isArray(record.links)
+      ? record.links.flatMap((link) => {
+          if (!Array.isArray(link) || link.length < 2) {
+            return [];
+          }
+
+          const source = typeof link[0] === "string" ? link[0].trim() : "";
+          const target = typeof link[1] === "string" ? link[1].trim() : "";
+
+          return source && target && nodeSet.has(source) && nodeSet.has(target)
+            ? [[source, target]]
+            : [];
+        })
+      : [];
+
+    return nodes.length >= 2 && links.length > 0
+      ? { nodes: nodes.slice(0, 8), links: links.slice(0, 10) }
+      : null;
+  }
+
+  if (diagram === "tree") {
+    const root = typeof record.root === "string" && record.root.trim() ? record.root.trim() : "";
+    const children = Array.isArray(record.children)
+      ? record.children.flatMap((child) =>
+          typeof child === "string" && child.trim() ? [child.trim()] : []
+        )
+      : [];
+
+    return root && children.length > 0 ? { root, children: children.slice(0, 6) } : null;
+  }
+
+  if (diagram === "distribution") {
+    const values = Array.isArray(record.values)
+      ? record.values.flatMap((item) => normalizeD3Point(item))
+      : [];
+
+    return values.length > 0 ? { values: values.slice(0, 6) } : null;
+  }
+
+  const events = Array.isArray(record.events)
+    ? record.events.flatMap((item, index) => normalizeD3Point(item, index))
+    : [];
+
+  return events.length > 0 ? { events: events.slice(0, 7) } : null;
+}
+
+function normalizeD3Point(value: unknown, fallbackValue = 1) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+  const label = typeof record?.label === "string" ? record.label.trim() : "";
+  const rawValue = record?.value;
+  const pointValue = typeof rawValue === "number" && Number.isFinite(rawValue) ? rawValue : fallbackValue;
+
+  return label ? [{ label, value: pointValue }] : [];
+}
+
+function parseJsonValue(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function stableJson(value: unknown) {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function compactUiText(value: unknown, fallback: string, limit: number) {
+  const text = typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+
+  if (text.length <= limit) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 function sceneThreeResourceData(job: Job, sceneNode: CanvasNode) {
   const title = stringInput(job.input.title) ?? `Three ${sceneResourceTitle(sceneNode)}`;
-  const narration = stringInput(job.input.narration) ?? stringData(sceneNode, "narration") ?? sceneResourceDescription(sceneNode);
+  const narration =
+    stringInput(job.input.narration) ??
+    stringData(sceneNode, "narration") ??
+    sceneResourceDescription(sceneNode);
 
   return {
     generatedBy: "create-three-node",
@@ -1983,11 +3192,16 @@ function resolveCompositionAnchor(canvas: CanvasDocument, sourceNode: CanvasNode
     return { sceneNode: sourceNode };
   }
 
-  const sceneNodeId = stringData(sourceNode, "sourceSceneNodeId") ?? stringData(sourceNode, "sceneNodeId");
+  const sceneNodeId =
+    stringData(sourceNode, "sourceSceneNodeId") ?? stringData(sourceNode, "sceneNodeId");
   const sceneId = stringData(sourceNode, "sceneId");
   const sceneNode =
-    (sceneNodeId ? canvas.nodes.find((node) => node.id === sceneNodeId && node.kind === "scene") : undefined) ??
-    (sceneId ? canvas.nodes.find((node) => node.kind === "scene" && node.refId === sceneId) : undefined);
+    (sceneNodeId
+      ? canvas.nodes.find((node) => node.id === sceneNodeId && node.kind === "scene")
+      : undefined) ??
+    (sceneId
+      ? canvas.nodes.find((node) => node.kind === "scene" && node.refId === sceneId)
+      : undefined);
 
   return { sceneNode };
 }
@@ -2011,6 +3225,15 @@ function upsertCompositionNode(
         (node.data.sourceSceneNodeId === sceneNode.id || node.data.sceneId === sceneId)
     )
     .map((node) => node.id);
+  const captionNode = findSceneResourceNode(canvas, sceneNode, "caption");
+  const voiceNode = findSceneResourceNode(canvas, sceneNode, "voice");
+  const durationSec = Math.max(
+    numberData(existingNode, "durationSec") ?? 0,
+    numberData(captionNode, "durationSec") ?? 0,
+    numberData(voiceNode, "audioDurationSec") ?? 0,
+    numberData(voiceNode, "durationSec") ?? 0,
+    numberData(sceneNode, "durationSec") ?? 6
+  );
   const nextNode: CanvasNode = {
     id: nodeId,
     kind: "composition",
@@ -2030,8 +3253,9 @@ function upsertCompositionNode(
       sourceSceneNodeId: sceneNode.id,
       sourceNodeId: sourceNode?.id,
       resourceNodeIds,
-      durationSec: numberData(sceneNode, "durationSec") ?? 6,
+      durationSec,
       primaryVisualKind: existingNode?.data.primaryVisualKind ?? "auto",
+      secondaryVisualKind: existingNode?.data.secondaryVisualKind ?? "none",
       layoutPreset: existingNode?.data.layoutPreset ?? "single",
       includeCaption: existingNode?.data.includeCaption ?? true,
       includeVoice: existingNode?.data.includeVoice ?? true,
@@ -2059,12 +3283,24 @@ function upsertCompositionNode(
 }
 
 function upsertPreviewNode(canvas: CanvasDocument, compositionNode: CanvasNode) {
-  const existingNode = canvas.nodes.find((node) => node.kind === "preview");
-  const nodeId = existingNode?.id ?? "node-preview";
+  const existingNode =
+    canvas.nodes.find(
+      (node) =>
+        node.kind === "preview" && node.data.sourceCompositionNodeId === compositionNode.id
+    ) ??
+    canvas.nodes.find(
+      (node) =>
+        node.kind === "preview" &&
+        node.id === "node-preview" &&
+        !stringData(node, "sourceCompositionNodeId")
+    );
+  const nodeId = existingNode?.id ?? `node-preview-${safeId(compositionNode.id)}`;
+  const sceneId = stringData(compositionNode, "sceneId");
+  const sourceSceneNodeId = stringData(compositionNode, "sourceSceneNodeId");
   const nextNode: CanvasNode = {
     id: nodeId,
     kind: "preview",
-    refId: existingNode?.refId ?? "preview-remotion",
+    refId: existingNode?.refId ?? `preview-${safeId(compositionNode.refId ?? compositionNode.id)}`,
     position: existingNode?.position ?? {
       x: compositionNode.position.x + 360,
       y: compositionNode.position.y
@@ -2077,6 +3313,8 @@ function upsertPreviewNode(canvas: CanvasDocument, compositionNode: CanvasNode) 
       title: existingNode?.data.title ?? "预览",
       description: "生成 Remotion 预览帧",
       sourceCompositionNodeId: compositionNode.id,
+      sceneId,
+      sourceSceneNodeId,
       previewFrame: numberData(existingNode, "previewFrame") ?? 30
     }
   };
@@ -2100,13 +3338,29 @@ function upsertPreviewNode(canvas: CanvasDocument, compositionNode: CanvasNode) 
   };
 }
 
-function upsertExportNode(canvas: CanvasDocument, previewNode: CanvasNode) {
-  const existingNode = canvas.nodes.find((node) => node.kind === "export");
-  const nodeId = existingNode?.id ?? "node-export";
+function upsertExportNode(
+  canvas: CanvasDocument,
+  previewNode: CanvasNode,
+  defaultFrameRange = "0:60"
+) {
+  const existingNode =
+    canvas.nodes.find(
+      (node) => node.kind === "export" && node.data.sourcePreviewNodeId === previewNode.id
+    ) ??
+    canvas.nodes.find(
+      (node) =>
+        node.kind === "export" &&
+        node.id === "node-export" &&
+        !stringData(node, "sourcePreviewNodeId")
+    );
+  const nodeId = existingNode?.id ?? `node-export-${safeId(previewNode.id)}`;
+  const existingFrameRange = stringData(existingNode, "frameRange");
+  const frameRange =
+    existingFrameRange && existingFrameRange !== "0:60" ? existingFrameRange : defaultFrameRange;
   const nextNode: CanvasNode = {
     id: nodeId,
     kind: "export",
-    refId: existingNode?.refId ?? "export-mp4",
+    refId: existingNode?.refId ?? `export-${safeId(previewNode.refId ?? previewNode.id)}`,
     position: existingNode?.position ?? {
       x: previewNode.position.x + 360,
       y: previewNode.position.y
@@ -2120,7 +3374,7 @@ function upsertExportNode(canvas: CanvasDocument, previewNode: CanvasNode) {
       description: "1080x1920 MP4",
       sourcePreviewNodeId: previewNode.id,
       exportScope: stringData(existingNode, "exportScope") ?? "clip",
-      frameRange: stringData(existingNode, "frameRange") ?? "0:60"
+      frameRange
     }
   };
   const nodes = existingNode
@@ -2132,6 +3386,55 @@ function upsertExportNode(canvas: CanvasDocument, previewNode: CanvasNode) {
     toNodeId: nodeId,
     relation: "renders"
   });
+
+  return {
+    node: nextNode,
+    canvas: {
+      ...canvas,
+      nodes,
+      edges
+    }
+  };
+}
+
+function upsertProjectExportNode(canvas: CanvasDocument) {
+  const anchor =
+    findNode(canvas, "topic") ?? findNode(canvas, "storyboard") ?? findNode(canvas, "script");
+  const existingNode = canvas.nodes.find(
+    (node) => node.kind === "export" && !stringData(node, "sourcePreviewNodeId")
+  );
+  const nodeId = existingNode?.id ?? "node-project-export";
+  const nextNode: CanvasNode = {
+    id: nodeId,
+    kind: "export",
+    refId: existingNode?.refId ?? "export-project-mp4",
+    position: existingNode?.position ?? {
+      x: (anchor?.position.x ?? 700) + 720,
+      y: (anchor?.position.y ?? 180) + 20
+    },
+    size: existingNode?.size ?? { width: 300, height: 170 },
+    status: "ready",
+    data: {
+      ...existingNode?.data,
+      generatedBy: "create-project-export-node",
+      title: existingNode?.data.title ?? "全片导出",
+      description: "导出当前项目的完整视频",
+      sourceProjectNodeId: anchor?.id,
+      exportScope: "full",
+      frameRange: stringData(existingNode, "frameRange") ?? "0:60"
+    }
+  };
+  const nodes = existingNode
+    ? canvas.nodes.map((node) => (node.id === existingNode.id ? nextNode : node))
+    : canvas.nodes.concat(nextNode);
+  const edges = anchor
+    ? ensureCanvasEdge(canvas.edges, {
+        id: `edge-project-export-${safeId(anchor.id)}`,
+        fromNodeId: anchor.id,
+        toNodeId: nodeId,
+        relation: "renders"
+      })
+    : canvas.edges;
 
   return {
     node: nextNode,
@@ -2160,14 +3463,14 @@ function upsertScriptNode(
     const updated = updateNodeData(canvas, existingScriptNode.id, data);
     const existingNode = updated.nodes.find((n) => n.id === existingScriptNode.id);
     if (existingNode) {
-      const contentHeight = calculateNodeContentHeight(
-        stringData(existingNode, "scriptText")
-      );
+      const contentHeight = calculateNodeContentHeight(stringData(existingNode, "scriptText"));
       if (contentHeight !== existingNode.size.height) {
         return {
           ...updated,
           nodes: updated.nodes.map((n) =>
-            n.id === existingScriptNode.id ? { ...n, size: { ...n.size, height: contentHeight } } : n
+            n.id === existingScriptNode.id
+              ? { ...n, size: { ...n.size, height: contentHeight } }
+              : n
           )
         };
       }
@@ -2275,7 +3578,9 @@ function applyChapters(
       .map((node) => node.id)
   );
   const staleSceneNodes = canvas.nodes.filter(
-    (node) => typeof node.data.sourceChapterNodeId === "string" && existingChapterIds.has(node.data.sourceChapterNodeId)
+    (node) =>
+      typeof node.data.sourceChapterNodeId === "string" &&
+      existingChapterIds.has(node.data.sourceChapterNodeId)
   );
   const staleSceneNodeIds = new Set(staleSceneNodes.map((node) => node.id));
   const staleSceneRefIds = new Set(
@@ -2298,8 +3603,8 @@ function applyChapters(
 
     return Boolean(
       (sourceSceneNodeId && staleSceneNodeIds.has(sourceSceneNodeId)) ||
-        (sceneId && (staleSceneNodeIds.has(sceneId) || staleSceneRefIds.has(sceneId))) ||
-        (typeof node.refId === "string" && staleSceneRefIds.has(node.refId))
+      (sceneId && (staleSceneNodeIds.has(sceneId) || staleSceneRefIds.has(sceneId))) ||
+      (typeof node.refId === "string" && staleSceneRefIds.has(node.refId))
     );
   };
   const nodes = canvas.nodes.filter((node) => !shouldRemoveChapterOutput(node));
@@ -2370,6 +3675,100 @@ function applyChapters(
       .concat(chapterNodes),
     edges: edges.concat(chapterEdges)
   };
+}
+
+type StoryboardScene = GeneratedStoryboard["scenes"][number];
+
+function normalizeGeneratedStoryboardScenes(
+  scenes: StoryboardScene[],
+  {
+    requestedSceneCount,
+    scriptText,
+    targetDurationSec
+  }: {
+    requestedSceneCount: number;
+    scriptText: string;
+    targetDurationSec: number;
+  }
+): StoryboardScene[] {
+  const sceneCount = Math.max(1, Math.min(Math.round(requestedSceneCount), 24));
+  const selectedScenes = selectStoryboardScenes(scenes, sceneCount);
+  const paragraphs = splitScriptParagraphs(scriptText);
+  const durations = distributeSceneDurations(targetDurationSec, sceneCount);
+
+  return Array.from({ length: sceneCount }, (_, index) => {
+    const scene = selectedScenes[index] ?? fallbackStoryboardScene(paragraphs, index, sceneCount);
+    const fallback = fallbackStoryboardScene(paragraphs, index, sceneCount);
+
+    return {
+      title: stringInput(scene.title) ?? fallback.title,
+      description: stringInput(scene.description) ?? fallback.description,
+      narration: stringInput(scene.narration) ?? fallback.narration,
+      sceneType: normalizeStoryboardSceneType(scene.sceneType),
+      durationSec: durations[index] ?? fallback.durationSec,
+      visualPrompt: stringInput(scene.visualPrompt) ?? fallback.visualPrompt,
+      caption: stringInput(scene.caption) ?? fallback.caption
+    };
+  });
+}
+
+function selectStoryboardScenes(scenes: StoryboardScene[], sceneCount: number) {
+  const validScenes = Array.isArray(scenes) ? scenes.filter((scene) => scene && typeof scene === "object") : [];
+
+  if (validScenes.length <= sceneCount) {
+    return validScenes;
+  }
+
+  if (sceneCount === 1) {
+    return [validScenes[0]!];
+  }
+
+  const lastIndex = validScenes.length - 1;
+  const selected = new Map<number, StoryboardScene>();
+
+  for (let index = 0; index < sceneCount; index += 1) {
+    const sourceIndex = Math.round((index * lastIndex) / (sceneCount - 1));
+    selected.set(index, validScenes[sourceIndex]!);
+  }
+
+  return Array.from({ length: sceneCount }, (_, index) => selected.get(index) ?? validScenes[index]!);
+}
+
+function distributeSceneDurations(targetDurationSec: number, sceneCount: number) {
+  const total = Math.max(sceneCount, Math.round(targetDurationSec));
+  const base = Math.floor(total / sceneCount);
+  const remainder = total - base * sceneCount;
+
+  return Array.from({ length: sceneCount }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function fallbackStoryboardScene(
+  paragraphs: string[],
+  index: number,
+  sceneCount: number
+): StoryboardScene {
+  const chunk = paragraphChunk(paragraphs, index, sceneCount);
+  const narration = chunk.join("\n\n") || paragraphs[index] || "继续讲解这个占星概念。";
+  const isLast = index === sceneCount - 1;
+
+  return {
+    title: index === 0 ? "开场引入" : isLast ? "总结收尾" : `讲解 ${index + 1}`,
+    description: summarizeText(narration, 80),
+    narration,
+    sceneType: index === 1 ? "astro-chart" : index === 2 ? "sketch" : "text",
+    durationSec: 1,
+    visualPrompt: "温暖简洁的占星教学短视频画面，突出本段核心概念",
+    caption: summarizeText(narration, 28)
+  };
+}
+
+function normalizeStoryboardSceneType(value: unknown): StoryboardScene["sceneType"] {
+  return value === "astro-chart" ||
+    value === "sketch" ||
+    value === "d3-diagram" ||
+    value === "three-scene"
+    ? value
+    : "text";
 }
 
 function applyStoryboard(
@@ -2474,6 +3873,7 @@ function createChapterPlan(
   const chapterCount = Math.max(1, Math.min(Math.round(chapterCountInput), 24));
   const paragraphs = splitScriptParagraphs(scriptText);
   const durationPerChapter = Math.max(30, Math.round(targetDurationSec / chapterCount));
+  const sceneCounts = distributeSceneDurations(getDefaultSceneCount(targetDurationSec), chapterCount);
 
   return Array.from({ length: chapterCount }, (_, index) => {
     const chunk = paragraphChunk(paragraphs, index, chapterCount);
@@ -2487,24 +3887,36 @@ function createChapterPlan(
       summary: summarizeText(chapterScriptText, 80),
       chapterScriptText,
       durationSec: durationPerChapter,
-      sceneCount: getDefaultSceneCount(durationPerChapter)
+      sceneCount: sceneCounts[index] ?? getDefaultChapterSceneCount(durationPerChapter)
     };
   });
 }
 
 function getDefaultChapterCount(targetDurationSec: number) {
   if (targetDurationSec <= 60) return 1;
+  if (targetDurationSec <= 120) return 2;
+  if (targetDurationSec <= 180) return 3;
   if (targetDurationSec <= 300) return 5;
-  if (targetDurationSec <= 900) return 8;
-  return 12;
+  if (targetDurationSec <= 900) return 7;
+  return 10;
 }
 
 function getDefaultSceneCount(targetDurationSec: number) {
-  if (targetDurationSec <= 30) return 5;
-  if (targetDurationSec <= 60) return 8;
-  if (targetDurationSec <= 180) return 4;
-  if (targetDurationSec <= 300) return 6;
-  return 8;
+  if (targetDurationSec <= 30) return 4;
+  if (targetDurationSec <= 60) return 5;
+  if (targetDurationSec <= 90) return 8;
+  if (targetDurationSec <= 180) return 10;
+  if (targetDurationSec <= 300) return 16;
+  if (targetDurationSec <= 900) return 36;
+  return 60;
+}
+
+function getDefaultChapterSceneCount(chapterDurationSec: number) {
+  if (chapterDurationSec <= 30) return 3;
+  if (chapterDurationSec <= 120) return 5;
+  if (chapterDurationSec <= 180) return 6;
+  if (chapterDurationSec <= 300) return 8;
+  return 10;
 }
 
 function splitScriptParagraphs(scriptText: string) {
@@ -2518,7 +3930,7 @@ function splitScriptParagraphs(scriptText: string) {
   }
 
   const compact = scriptText.trim();
-  return compact ? compact.match(/.{1,120}/g) ?? [compact] : ["先写入本章文案，再展开分镜。"];
+  return compact ? (compact.match(/.{1,120}/g) ?? [compact]) : ["先写入本章文案，再展开分镜。"];
 }
 
 function paragraphChunk(paragraphs: string[], index: number, total: number) {
@@ -2541,10 +3953,7 @@ function summarizeText(text: string, maxLength: number) {
   return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
 }
 
-function ensureCanvasEdge(
-  edges: CanvasDocument["edges"],
-  edge: CanvasDocument["edges"][number]
-) {
+function ensureCanvasEdge(edges: CanvasDocument["edges"], edge: CanvasDocument["edges"][number]) {
   return edges.some(
     (existing) => existing.fromNodeId === edge.fromNodeId && existing.toNodeId === edge.toNodeId
   )
@@ -2601,18 +4010,21 @@ function numberData(node: CanvasNode | undefined, key: string) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function birthInputFromJob(job: Job, chartNode: CanvasNode | undefined): BirthChartInput | undefined {
+function birthInputFromJob(
+  job: Job,
+  chartNode: CanvasNode | undefined
+): BirthChartInput | undefined {
   const date = stringInput(job.input.birthDate) ?? stringData(chartNode, "birthDate");
   const time = stringInput(job.input.birthTime) ?? stringData(chartNode, "birthTime");
   const timezoneOffsetMinutes =
     numberInput(job.input.timezoneOffsetMinutes) ?? numberData(chartNode, "timezoneOffsetMinutes");
+  const timezone = stringInput(job.input.timezone) ?? stringData(chartNode, "timezone");
   const latitude = numberInput(job.input.latitude) ?? numberData(chartNode, "latitude");
   const longitude = numberInput(job.input.longitude) ?? numberData(chartNode, "longitude");
 
   if (
     !date ||
     !time ||
-    timezoneOffsetMinutes === undefined ||
     latitude === undefined ||
     longitude === undefined
   ) {
@@ -2622,12 +4034,26 @@ function birthInputFromJob(job: Job, chartNode: CanvasNode | undefined): BirthCh
   return {
     date,
     time,
-    timezoneOffsetMinutes,
+    ...(timezoneOffsetMinutes === undefined ? {} : { timezoneOffsetMinutes }),
+    timezone,
     latitude,
     longitude,
     placeName: stringInput(job.input.placeName) ?? stringData(chartNode, "placeName"),
     label: stringInput(job.input.label) ?? stringData(chartNode, "label"),
-    houseSystem: "equal"
+    houseSystem: (stringInput(job.input.houseSystem) ??
+      stringData(chartNode, "houseSystem") ??
+      "equal") as BirthChartInput["houseSystem"],
+    zodiacMode: (stringInput(job.input.zodiacMode) ??
+      stringData(chartNode, "zodiacMode") ??
+      "tropical") as BirthChartInput["zodiacMode"],
+    siderealAyanamsa:
+      stringInput(job.input.siderealAyanamsa) ?? stringData(chartNode, "siderealAyanamsa"),
+    planetSet: (stringInput(job.input.planetSet) ??
+      stringData(chartNode, "planetSet") ??
+      "modern") as BirthChartInput["planetSet"],
+    nodeType: (stringInput(job.input.nodeType) ??
+      stringData(chartNode, "nodeType") ??
+      "mean") as BirthChartInput["nodeType"]
   };
 }
 
@@ -2644,8 +4070,21 @@ function renderD3VisualAssetSvg(node: CanvasNode, title: string) {
           : renderTimelineSvg(data);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080">
-  <rect width="1080" height="1080" rx="0" fill="#f7f1df"/>
-  <text x="72" y="120" fill="#9b6828" font-size="34" font-family="sans-serif" font-weight="900">D3 ${escapeXml(diagram)}</text>
+  <defs>
+    <filter id="d3-card-shadow" x="-16%" y="-24%" width="132%" height="148%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#17352f" flood-opacity="0.13"/>
+    </filter>
+    <linearGradient id="d3-card-fill" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f0f6ec"/>
+    </linearGradient>
+    <marker id="d3-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" viewBox="0 0 12 12">
+      <path d="M0 0 L12 6 L0 12 Z" fill="#819989"/>
+    </marker>
+  </defs>
+  <rect width="1080" height="1080" rx="0" fill="#f7faf4"/>
+  <path d="M86 908 C262 766 406 824 560 650 C710 480 818 392 990 260" fill="none" stroke="#e0e9dd" stroke-width="6" stroke-dasharray="14 18"/>
+  <text x="72" y="120" fill="#6f7f75" font-size="34" font-family="sans-serif" font-weight="900">D3 ${escapeXml(diagram.toUpperCase())}</text>
   <text x="72" y="188" fill="#18352f" font-size="62" font-family="sans-serif" font-weight="900">${escapeXml(title)}</text>
   ${body}
 </svg>`;
@@ -2657,17 +4096,19 @@ function renderTimelineSvg(data: Record<string, unknown> | undefined) {
   const circles = points
     .map((point, index) => {
       const x = 126 + (index / count) * 828;
-      const y = index % 2 === 0 ? 540 : 430;
+      const y = index % 2 === 0 ? 560 : 430;
+      const cardY = index % 2 === 0 ? y + 54 : y - 128;
       return `<g>
-    <line x1="${x}" y1="540" x2="${x}" y2="${y}" stroke="#c89437" stroke-width="8"/>
-    <circle cx="${x}" cy="${y}" r="34" fill="#c89437"/>
-    <text x="${x}" y="${y + 86}" text-anchor="middle" fill="#18352f" font-size="30" font-family="sans-serif" font-weight="900">${escapeXml(point.label)}</text>
+    <line x1="${x}" y1="560" x2="${x}" y2="${y}" stroke="#d7b36f" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="${x}" cy="${y}" r="30" fill="${index === 0 ? "#2f6d3b" : "#d7b36f"}" stroke="#ffffff" stroke-width="10"/>
+    ${renderD3AssetCard(x - 92, cardY, 184, 78, point.label, `step ${index + 1}`, index === 0 ? "#2f6d3b" : "#d7b36f")}
   </g>`;
     })
     .join("\n");
 
   return `<g>
-  <line x1="126" y1="540" x2="954" y2="540" stroke="#26443d" stroke-width="10"/>
+  <path d="M126 560 C330 420 560 700 954 560" fill="none" stroke="#2f6d3b" stroke-width="12" stroke-linecap="round"/>
+  <path d="M126 560 C330 420 560 700 954 560" fill="none" stroke="#d7b36f" stroke-width="28" stroke-linecap="round" opacity="0.26"/>
   ${circles}
 </g>`;
 }
@@ -2676,17 +4117,18 @@ function renderDistributionSvg(data: Record<string, unknown> | undefined) {
   const points = distributionVisualPoints(data);
   const maxValue = Math.max(1, ...points.map((point) => point.value));
 
-  return `<g transform="translate(120 360)">
+  return `<g transform="translate(104 330)">
   ${points
     .slice(0, 5)
     .map((point, index) => {
-      const y = index * 112;
-      const width = Math.max(80, (point.value / maxValue) * 760);
+      const y = index * 118;
+      const width = Math.max(100, (point.value / maxValue) * 730);
       const fill = index % 2 === 0 ? "#26443d" : "#c89437";
       return `<g transform="translate(0 ${y})">
-    <text x="0" y="0" fill="#18352f" font-size="34" font-family="sans-serif" font-weight="900">${escapeXml(point.label)}</text>
-    <rect x="0" y="24" width="780" height="54" rx="10" fill="#e8dcc4"/>
-    <rect x="0" y="24" width="${width}" height="54" rx="10" fill="${fill}"/>
+    <text x="0" y="22" fill="#18352f" font-size="32" font-family="sans-serif" font-weight="900">${escapeXml(compactSvgText(point.label, 18))}</text>
+    <rect x="260" y="-2" width="740" height="56" rx="18" fill="#e6ecdf"/>
+    <rect x="260" y="-2" width="${width}" height="56" rx="18" fill="${fill}"/>
+    <text x="1000" y="36" text-anchor="end" fill="#53665c" font-size="28" font-family="sans-serif" font-weight="900">${Math.round((point.value / maxValue) * 100)}%</text>
   </g>`;
     })
     .join("\n")}
@@ -2714,34 +4156,57 @@ function renderRelationshipSvg(data: Record<string, unknown> | undefined) {
         return source && target ? [[source, target] as [string, string]] : [];
       })
     : fallbackLinks;
-  const centerX = 540;
-  const centerY = 560;
-  const radius = 260;
-  const positions = new Map(
-    nodes.slice(0, 8).map((node, index) => {
-      const angle = (index / Math.max(nodes.length, 1)) * Math.PI * 2 - Math.PI / 2;
-      return [node, { x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius }];
-    })
-  );
-  const linkSvg = links
-    .map(([source, target]) => {
+  const visibleNodes = nodes.slice(0, 6);
+  const primary = visibleNodes[0] ?? fallbackNodes[0]!;
+  const hub = { x: 540, y: 562 };
+  const slots = [
+    { x: 92, y: 356, anchorX: 342, anchorY: 410 },
+    { x: 738, y: 356, anchorX: 738, anchorY: 410 },
+    { x: 92, y: 652, anchorX: 342, anchorY: 706 },
+    { x: 738, y: 652, anchorX: 738, anchorY: 706 },
+    { x: 410, y: 790, anchorX: 540, anchorY: 790 }
+  ];
+  const positions = new Map<string, { x: number; y: number; anchorX: number; anchorY: number; width: number; height: number }>();
+  positions.set(primary, { x: 410, y: 504, anchorX: hub.x, anchorY: hub.y, width: 260, height: 116 });
+  visibleNodes.slice(1).forEach((node, index) => {
+    const slot = slots[index] ?? slots[slots.length - 1]!;
+    positions.set(node, { ...slot, width: 250, height: 108 });
+  });
+  const safeLinks = links
+    .filter(([source, target]) => positions.has(source) && positions.has(target))
+    .slice(0, 10);
+  const fallbackHubLinks = visibleNodes.slice(1).map((node) => [primary, node] as [string, string]);
+  const visibleLinks = safeLinks.length > 0 ? safeLinks : fallbackHubLinks;
+  const linkSvg = visibleLinks
+    .map(([source, target], index) => {
       const start = positions.get(source);
       const end = positions.get(target);
       return start && end
-        ? `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="#9fb3a2" stroke-width="8" stroke-linecap="round"/>`
+        ? `<path d="M ${start.anchorX} ${start.anchorY} C ${hub.x} ${start.anchorY}, ${hub.x} ${end.anchorY}, ${end.anchorX} ${end.anchorY}" fill="none" stroke="#819989" stroke-width="8" stroke-linecap="round" marker-end="url(#d3-arrow)" opacity="${index > 5 ? "0.54" : "0.82"}"/>`
         : "";
     })
     .join("\n");
   const nodeSvg = [...positions.entries()]
     .map(
-      ([node, position], index) => `<g>
-    <circle cx="${position.x}" cy="${position.y}" r="44" fill="${index === 0 ? "#26443d" : "#c89437"}"/>
-    <text x="${position.x}" y="${position.y + 78}" text-anchor="middle" fill="#18352f" font-size="30" font-family="sans-serif" font-weight="900">${escapeXml(node)}</text>
-  </g>`
+      ([node, position], index) =>
+        renderD3AssetCard(
+          position.x,
+          position.y,
+          position.width,
+          position.height,
+          node,
+          index === 0 ? "core concept" : `node ${index}`,
+          index === 0 ? "#2f6d3b" : index % 2 === 0 ? "#c89437" : "#d7b36f"
+        )
     )
     .join("\n");
 
-  return `<g>${linkSvg}${nodeSvg}</g>`;
+  return `<g>
+  <circle cx="${hub.x}" cy="${hub.y}" r="166" fill="#e8efe5"/>
+  <circle cx="${hub.x}" cy="${hub.y}" r="202" fill="none" stroke="#dbe6d8" stroke-width="6" stroke-dasharray="12 16"/>
+  ${visibleLinks.length > 0 ? linkSvg : ""}
+  ${nodeSvg}
+</g>`;
 }
 
 function renderTreeSvg(data: Record<string, unknown> | undefined) {
@@ -2753,20 +4218,38 @@ function renderTreeSvg(data: Record<string, unknown> | undefined) {
   const step = visibleChildren.length > 1 ? 720 / (visibleChildren.length - 1) : 1;
 
   return `<g>
-  <circle cx="540" cy="380" r="58" fill="#26443d"/>
-  <text x="540" y="480" text-anchor="middle" fill="#18352f" font-size="38" font-family="sans-serif" font-weight="900">${escapeXml(root)}</text>
+  ${renderD3AssetCard(396, 320, 288, 110, root, "root", "#2f6d3b")}
   ${visibleChildren
     .map((child, index) => {
       const x = 180 + index * step;
       const y = 700;
       return `<g>
-    <path d="M 540 440 C 540 565, ${x} 565, ${x} ${y - 58}" fill="none" stroke="#c89437" stroke-width="8"/>
-    <circle cx="${x}" cy="${y}" r="44" fill="#fefbf2" stroke="#26443d" stroke-width="8"/>
-    <text x="${x}" y="${y + 86}" text-anchor="middle" fill="#18352f" font-size="30" font-family="sans-serif" font-weight="900">${escapeXml(child)}</text>
+    <path d="M 540 430 C 540 565, ${x} 565, ${x} ${y - 30}" fill="none" stroke="#c89437" stroke-width="8" stroke-linecap="round"/>
+    ${renderD3AssetCard(x - 92, y, 184, 82, child, `branch ${index + 1}`, index % 2 === 0 ? "#d7b36f" : "#c89437")}
   </g>`;
     })
     .join("\n")}
 </g>`;
+}
+
+function renderD3AssetCard(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  label: string,
+  subtitle: string,
+  accent: string
+) {
+  const safeLabel = escapeXml(compactSvgText(label, width > 220 ? 18 : 14));
+  const safeSubtitle = escapeXml(subtitle);
+
+  return `<g filter="url(#d3-card-shadow)">
+    <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="24" fill="url(#d3-card-fill)"/>
+    <rect x="${x}" y="${y}" width="14" height="${height}" rx="7" fill="${accent}"/>
+    <text x="${x + 34}" y="${y + height / 2 - 5}" fill="#18352f" font-size="${width > 220 ? 34 : 28}" font-family="sans-serif" font-weight="900">${safeLabel}</text>
+    <text x="${x + 34}" y="${y + height / 2 + 34}" fill="#6f7f75" font-size="22" font-family="sans-serif" font-weight="800">${safeSubtitle}</text>
+  </g>`;
 }
 
 function renderThreeVisualAssetSvg(node: CanvasNode, title: string) {
@@ -2774,7 +4257,8 @@ function renderThreeVisualAssetSvg(node: CanvasNode, title: string) {
   const scene = normalizeThreeScene(stringData(node, "threeScene"));
   const accentColor =
     stringFromRecord(data ?? {}, "accentColor") ?? stringData(node, "accentColor") ?? "#e8c164";
-  const focus = stringFromRecord(data ?? {}, "focus") ?? (scene === "planet-focus" ? "Sun" : "Ascendant");
+  const focus =
+    stringFromRecord(data ?? {}, "focus") ?? (scene === "planet-focus" ? "Sun" : "Ascendant");
   const stars = Array.from({ length: scene === "zodiac-space" ? 70 : 42 }, (_, index) => {
     const x = 80 + ((index * 137) % 920);
     const y = 240 + ((index * 211) % 670);
@@ -2869,26 +4353,289 @@ function jsonRecordData(node: CanvasNode | undefined, key: string) {
 }
 
 function normalizeD3Diagram(value: string | undefined) {
-  return value === "relationship" || value === "tree" || value === "distribution" ? value : "timeline";
+  return value === "relationship" || value === "tree" || value === "distribution"
+    ? value
+    : "timeline";
 }
 
 function normalizeThreeScene(value: string | undefined) {
   return value === "zodiac-space" || value === "planet-focus" ? value : "orbit";
 }
 
-async function writeMockSvg(outputPath: string, prompt: string) {
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(
-    outputPath,
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536">
-      <rect width="1024" height="1536" fill="#fbfaf4"/>
-      <path d="M258 1120 258 430 720 330 720 1000 258 1120Z" fill="none" stroke="#17352f" stroke-width="18"/>
-      <path d="M390 1086 390 520 720 330" fill="none" stroke="#17352f" stroke-width="14"/>
-      <circle cx="690" cy="320" r="18" fill="#c89437"/>
-      <text x="96" y="1320" fill="#17352f" font-size="38" font-family="sans-serif">${escapeXml(prompt.slice(0, 80))}</text>
-    </svg>`,
-    "utf8"
+type ImageVisualStyle =
+  | "whiteboard-sketch"
+  | "whiteboard"
+  | "line-art"
+  | "realistic"
+  | "minimal-line"
+  | "zodiac-whiteboard";
+
+function normalizeImageStyle(value: string | undefined): ImageVisualStyle {
+  switch (value) {
+    case "whiteboard-sketch":
+    case "whiteboard":
+    case "line-art":
+    case "realistic":
+    case "minimal-line":
+    case "zodiac-whiteboard":
+      return value;
+    case "black-whiteboard-teaching":
+      return "whiteboard-sketch";
+    default:
+      return "whiteboard-sketch";
+  }
+}
+
+function appendImagePromptPresetAdditions(
+  prompt: string,
+  additions: Array<{ promptSuffix: string }>
+) {
+  const configuredSuffix = additions
+    .map((addition) => addition.promptSuffix.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  if (!configuredSuffix) {
+    return prompt;
+  }
+
+  return [prompt.trim(), configuredSuffix].filter(Boolean).join("\n\n");
+}
+
+function normalizeImageModel(model: string | undefined) {
+  const normalized = model?.trim();
+
+  if (!normalized || !isImageGenerationModel(normalized)) {
+    return "gpt-image-2";
+  }
+
+  return normalized;
+}
+
+function isImageGenerationModel(model: string) {
+  const normalized = model.toLowerCase();
+
+  return (
+    normalized.includes("image") ||
+    normalized.startsWith("img-") ||
+    normalized.startsWith("dall-e")
   );
+}
+
+function normalizeImagePrompt(
+  prompt: string,
+  context: {
+    title?: string;
+    description?: string;
+    narration?: string;
+    imageStyle: ImageVisualStyle;
+  }
+) {
+  const normalizedPrompt = prompt.replace(/\s+/g, " ").trim();
+  const style = imageStylePromptText(context.imageStyle);
+  const basePrompt = hasCjkText(normalizedPrompt)
+    ? normalizedPrompt
+    : getChineseImagePromptFromContext(context) ?? translateLegacyImagePrompt(normalizedPrompt);
+
+  return [
+    basePrompt,
+    `画面要求：${style}，主体清晰，构图完整，细节精致，适合短视频画面，不要粗糙占位图，不要文字水印。`
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getChineseImagePromptFromContext({
+  title,
+  description,
+  narration
+}: {
+  title?: string;
+  description?: string;
+  narration?: string;
+}) {
+  const contextText = [description, narration, title]
+    .map((value) => value?.replace(/\s+/g, " ").trim())
+    .filter((value): value is string => Boolean(value && hasCjkText(value)))
+    .join("。");
+
+  if (!contextText) {
+    return undefined;
+  }
+
+  return `请生成一张占星教学图片。主题：${summarizeText(contextText, 140)}。画面需要直接服务这段讲解，避免生成大段文字。`;
+}
+
+function translateLegacyImagePrompt(prompt: string) {
+  const normalized = prompt.toLowerCase();
+
+  if (normalized.includes("title card")) {
+    return "简洁的占星教学标题画面，暖色调，主体清晰，适合短视频开场。";
+  }
+
+  if (normalized.includes("natal chart") || normalized.includes("astrology chart")) {
+    return "占星本命盘圆盘画面，行星位置清晰，带轻微发光和教学标注。";
+  }
+
+  if (normalized.includes("door") && normalized.includes("starry")) {
+    return "简洁线稿插画：一个人推开门走进星空房间，画面温暖清晰，带占星教学氛围。";
+  }
+
+  if (normalized.includes("text overlay")) {
+    return "干净的重点文字画面，柔和暖色背景，优雅排版，适合教学视频。";
+  }
+
+  if (normalized.includes("line art") || normalized.includes("line drawing")) {
+    return "简洁线稿插画，表现占星教学概念，画面干净，暖色背景。";
+  }
+
+  return "简洁的占星教学插画，清晰表达核心概念，画面温暖、干净、精致。";
+}
+
+function imageStylePromptText(style: ImageVisualStyle) {
+  switch (style) {
+    case "realistic":
+      return "写实图片风格，真实光影和材质";
+    case "line-art":
+      return "精致线稿插画风格";
+    case "minimal-line":
+      return "极简线稿风格，留白充足";
+    case "zodiac-whiteboard":
+      return "星盘白板草图风格，符号清晰";
+    case "whiteboard":
+      return "白板教学插画风格";
+    case "whiteboard-sketch":
+    default:
+      return "白板简笔画风格，但需要精致完整";
+  }
+}
+
+function hasCjkText(value: string) {
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function normalizeLlmModel(model: string | undefined) {
+  if (!model || model.startsWith("gpt-image") || model.includes("image")) {
+    return "gpt-5.5";
+  }
+
+  return model;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, value));
+}
+
+function compactSvgText(value: string, limit: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+async function writeMockPng(outputPath: string, width = 1536, height = 1024) {
+  const rowStride = 1 + width * 3;
+  const raw = Buffer.alloc(rowStride * height);
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  for (let y = 0; y < height; y += 1) {
+    const rowOffset = y * rowStride;
+    raw[rowOffset] = 0;
+
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowOffset + 1 + x * 3;
+      const grid = x % 96 < 2 || y % 96 < 2;
+      const dx = (x - centerX) / (width * 0.26);
+      const dy = (y - centerY) / (height * 0.3);
+      const radius = Math.sqrt(dx * dx + dy * dy);
+      const inCore = radius < 0.72;
+      const inRing = radius >= 0.72 && radius < 0.92;
+      const inAccent = Math.abs(dx + dy) < 0.035 || Math.abs(dx - dy) < 0.035;
+
+      let red = 248;
+      let green = 246;
+      let blue = 236;
+
+      if (grid) {
+        red = 232;
+        green = 229;
+        blue = 216;
+      }
+
+      if (inRing) {
+        red = 36;
+        green = 92;
+        blue = 82;
+      } else if (inCore) {
+        red = 255;
+        green = 253;
+        blue = 245;
+      }
+
+      if (inAccent && radius < 1.1) {
+        red = 207;
+        green = 154;
+        blue = 55;
+      }
+
+      raw[offset] = red;
+      raw[offset + 1] = green;
+      raw[offset + 2] = blue;
+    }
+  }
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  header[10] = 0;
+  header[11] = 0;
+  header[12] = 0;
+
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk("IHDR", header),
+    createPngChunk("IDAT", deflateSync(raw)),
+    createPngChunk("IEND", Buffer.alloc(0))
+  ]);
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, png);
+}
+
+function createPngChunk(type: string, data: Buffer) {
+  const length = Buffer.alloc(4);
+  const chunkType = Buffer.from(type, "ascii");
+  const crc = Buffer.alloc(4);
+  const crcInput = Buffer.concat([chunkType, data]);
+
+  length.writeUInt32BE(data.length, 0);
+  crc.writeUInt32BE(crc32(crcInput), 0);
+
+  return Buffer.concat([length, chunkType, data, crc]);
+}
+
+function crc32(input: Buffer) {
+  let crc = 0xffffffff;
+
+  for (const byte of input) {
+    crc ^= byte;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function writeMockWav(outputPath: string, durationSec: number) {
@@ -2972,7 +4719,6 @@ async function writeMockTtsManifest(
 }
 
 function escapeXml(value: string) {
-
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

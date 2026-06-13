@@ -9,7 +9,7 @@ const nextConfig = {
     ignoreDuringBuilds: true
   },
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  serverExternalPackages: ["better-sqlite3"],
+  serverExternalPackages: ["better-sqlite3", "node-gyp-build", "sweph"],
   transpilePackages: [
     "@zeroflow/core",
     "@zeroflow/db",

@@ -8,6 +8,11 @@ type DiagramPoint = {
   value: number;
 };
 
+type RelationshipData = {
+  nodes: string[];
+  links: Array<[string, string]>;
+};
+
 const fallbackPoints: DiagramPoint[] = [
   { label: "Birth moment", value: 0 },
   { label: "Eastern horizon", value: 1 },
@@ -60,57 +65,37 @@ export function D3DiagramScene({ scene }: { scene: D3DiagramSceneSpec }) {
         color: "#18352f"
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: 74,
-          right: 74,
-          top: 108,
-          opacity: reveal,
-          transform: `translateY(${(1 - reveal) * 22}px)`
-        }}
-      >
-        <div
-          style={{
-            color: "#9b6828",
-            fontSize: 32,
-            fontWeight: 900,
-            letterSpacing: 0,
-            textTransform: "uppercase"
-          }}
-        >
-          D3 contract: {scene.diagram}
-        </div>
-        <h2
-          style={{
-            margin: "18px 0 0",
-            maxWidth: 840,
-            fontSize: 78,
-            fontWeight: 900,
-            lineHeight: 1.04,
-            letterSpacing: 0
-          }}
-        >
-          {scene.title}
-        </h2>
-      </div>
-
       <svg
         viewBox="0 0 1080 1180"
         style={{
           position: "absolute",
           left: 0,
-          top: 330,
+          top: 180,
           width: 1080,
           height: 1180,
           opacity: reveal,
           transform: `scale(${0.96 + reveal * 0.04})`
         }}
       >
+        <defs>
+          <filter id="d3-scene-shadow" x="-16%" y="-24%" width="132%" height="148%">
+            <feDropShadow dx="0" dy="16" floodColor="#17352f" floodOpacity="0.13" stdDeviation="16" />
+          </filter>
+          <linearGradient id="d3-scene-card" x1="0%" x2="100%" y1="0%" y2="100%">
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#f0f6ec" />
+          </linearGradient>
+          <marker id="d3-scene-arrow" markerHeight="12" markerWidth="12" orient="auto" refX="10" refY="6" viewBox="0 0 12 12">
+            <path d="M0 0 L12 6 L0 12 Z" fill="#819989" />
+          </marker>
+        </defs>
         <rect x="0" y="0" width="1080" height="1180" fill="#f7f1df" />
+        <path d="M74 910 C248 780 396 828 560 650 C710 488 820 390 988 264" fill="none" stroke="#e0e9dd" strokeDasharray="14 18" strokeWidth="6" />
         <g transform="translate(112 130)">
           {scene.diagram === "distribution" ? (
             <Distribution points={points} reveal={reveal} />
+          ) : scene.diagram === "relationship" ? (
+            <Relationship data={relationshipData(scene.data)} reveal={reveal} />
           ) : scene.diagram === "tree" ? (
             <Tree points={points} reveal={reveal} />
           ) : (
@@ -120,6 +105,72 @@ export function D3DiagramScene({ scene }: { scene: D3DiagramSceneSpec }) {
       </svg>
       <CaptionLayer caption={scene.caption} />
     </AbsoluteFill>
+  );
+}
+
+function Relationship({ data, reveal }: { data: RelationshipData; reveal: number }) {
+  const centerX = 410;
+  const centerY = 310;
+  const nodes = data.nodes.slice(0, 6);
+  const primary = nodes[0] ?? "Core";
+  const slots = [
+    { x: -28, y: 28, anchorX: 220, anchorY: 82 },
+    { x: 600, y: 28, anchorX: 600, anchorY: 82 },
+    { x: -28, y: 326, anchorX: 220, anchorY: 380 },
+    { x: 600, y: 326, anchorX: 600, anchorY: 380 },
+    { x: 286, y: 474, anchorX: 410, anchorY: 474 }
+  ];
+  const positions = new Map<string, { x: number; y: number; anchorX: number; anchorY: number; width: number; height: number }>(
+    [[primary, { x: 286, y: 252, anchorX: centerX, anchorY: centerY, width: 248, height: 116 }]]
+  );
+  nodes.slice(1).forEach((node, index) => {
+    const slot = slots[index] ?? slots[slots.length - 1]!;
+    positions.set(node, { ...slot, width: 248, height: 108 });
+  });
+  const safeLinks = data.links
+    .filter(([source, target]) => positions.has(source) && positions.has(target))
+    .slice(0, 10);
+  const fallbackLinks = nodes.slice(1).map((node) => [primary, node] as [string, string]);
+  const links = safeLinks.length > 0 ? safeLinks : fallbackLinks;
+
+  return (
+    <g>
+      <circle cx={centerX} cy={centerY} fill="#e8efe5" r="166" />
+      <circle cx={centerX} cy={centerY} fill="none" opacity="0.72" r="202" stroke="#dbe6d8" strokeDasharray="12 16" strokeWidth="6" />
+      {links.map(([source, target], index) => {
+        const start = positions.get(source);
+        const end = positions.get(target);
+
+        return start && end ? (
+          <path
+            d={`M ${start.anchorX} ${start.anchorY} C ${centerX} ${start.anchorY}, ${centerX} ${end.anchorY}, ${end.anchorX} ${end.anchorY}`}
+            fill="none"
+            key={`${source}-${target}-${index}`}
+            markerEnd="url(#d3-scene-arrow)"
+            opacity={Math.min(1, reveal + index * 0.06)}
+            stroke="#819989"
+            strokeLinecap="round"
+            strokeWidth="8"
+          />
+        ) : null;
+      })}
+      {[...positions.entries()].map(([node, position], index) => {
+        const accent = index === 0 ? "#2f6d3b" : index % 2 === 0 ? "#c89437" : "#d7b36f";
+
+        return (
+          <g filter="url(#d3-scene-shadow)" key={node} opacity={Math.min(1, reveal + index * 0.08)}>
+            <rect fill="url(#d3-scene-card)" height={position.height} rx="24" width={position.width} x={position.x} y={position.y} />
+            <rect fill={accent} height={position.height} rx="7" width="14" x={position.x} y={position.y} />
+            <text fill="#18352f" fontSize={index === 0 ? 34 : 30} fontWeight="900" x={position.x + 34} y={position.y + position.height / 2 - 5}>
+              {compactLabel(node, index === 0 ? 16 : 14)}
+            </text>
+            <text fill="#6f7f75" fontSize="22" fontWeight="800" x={position.x + 34} y={position.y + position.height / 2 + 34}>
+              {index === 0 ? "core concept" : `node ${index}`}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }
 
@@ -240,6 +291,40 @@ function diagramPoints(scene: D3DiagramSceneSpec): DiagramPoint[] {
   }
 
   return fallbackPoints;
+}
+
+function relationshipData(data: unknown): RelationshipData {
+  const record = recordData(data);
+  const fallbackNodes = ["Birth moment", "Eastern horizon", "Rising sign", "First impression"];
+  const nodes = Array.isArray(record?.nodes)
+    ? record.nodes.flatMap((node) => (typeof node === "string" ? [node] : []))
+    : fallbackNodes;
+  const fallbackLinks: Array<[string, string]> = [
+    ["Birth moment", "Eastern horizon"],
+    ["Eastern horizon", "Rising sign"],
+    ["Rising sign", "First impression"]
+  ];
+  const links = Array.isArray(record?.links)
+    ? record.links.flatMap((link) => {
+        if (!Array.isArray(link) || link.length < 2) {
+          return [];
+        }
+
+        const source = stringData(link[0]);
+        const target = stringData(link[1]);
+
+        return source && target ? [[source, target] as [string, string]] : [];
+      })
+    : fallbackLinks;
+
+  return {
+    nodes: nodes.length > 0 ? nodes.slice(0, 7) : fallbackNodes,
+    links: links.slice(0, 10)
+  };
+}
+
+function compactLabel(value: string, maxLength = 18) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
 }
 
 function recordData(value: unknown): Record<string, unknown> | undefined {

@@ -12,6 +12,7 @@ export function getAiPromptDataKey(kind: CanvasNodeKind): AiPromptDataKey | null
     case "chapter":
       return "chapterScriptText";
     case "image":
+    case "d3":
       return "prompt";
     default:
       return null;
@@ -33,6 +34,8 @@ export function getAiPromptValue(node: CanvasNode) {
       return firstString(node.data.chapterScriptText, node.data.summary, node.data.description);
     case "image":
       return firstString(node.data.prompt, node.data.visualPrompt, node.data.description);
+    case "d3":
+      return firstString(node.data.prompt, node.data.description, node.data.title);
     default:
       return "";
   }
@@ -47,6 +50,8 @@ export function getAiPromptLabel(kind: CanvasNodeKind) {
       return "本章文案";
     case "image":
       return "图片提示词";
+    case "d3":
+      return "D3 图表提示词";
     default:
       return "提示词";
   }
@@ -63,6 +68,8 @@ export function getAiPromptPlaceholder(kind: CanvasNodeKind) {
       return "直接编辑这一章的口播内容，写完后点击展开本章分镜。";
     case "image":
       return "描述要生成的画面、风格、主体和构图。";
+    case "d3":
+      return "描述你想表达的数据关系、流程、层级或对比，系统会生成可渲染的 D3 图表数据。";
     default:
       return "";
   }
@@ -75,6 +82,7 @@ export function getAiPromptRows(kind: CanvasNodeKind) {
     case "chapter":
       return 10;
     case "image":
+    case "d3":
       return 5;
     default:
       return 4;

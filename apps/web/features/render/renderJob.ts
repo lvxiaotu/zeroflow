@@ -43,7 +43,7 @@ export function getExportFrameRange(node: CanvasNode) {
 }
 
 export function getExportScope(node: CanvasNode) {
-  return stringData(node.data.exportScope, "clip") === "full" ? "full" : "clip";
+  return stringData(node.data.exportScope, "full") === "clip" ? "clip" : "full";
 }
 
 function stringData(value: unknown, fallback: string) {

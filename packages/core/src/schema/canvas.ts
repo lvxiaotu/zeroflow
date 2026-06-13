@@ -11,6 +11,7 @@ export const canvasNodeKindSchema = z.enum([
   "caption",
   "voice",
   "chart",
+  "chart-highlight",
   "image",
   "d3",
   "three",

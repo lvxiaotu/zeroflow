@@ -66,10 +66,31 @@ export function D3VisualPreview({
             aria-label={`${diagram} preview`}
             className="visual-preview-svg"
             role="img"
-            viewBox="0 0 360 220"
+            viewBox="0 0 560 340"
           >
-            <rect width="360" height="220" rx="10" fill="#f6f8f1" />
-            <g transform="translate(28 28)">{renderD3Preview(preview.diagram, preview.data)}</g>
+            <defs>
+              <filter id="d3-preview-shadow" x="-16%" y="-28%" width="132%" height="156%">
+                <feDropShadow dx="0" dy="10" stdDeviation="10" floodColor="#17352f" floodOpacity="0.12" />
+              </filter>
+              <linearGradient id="d3-preview-card" x1="0%" x2="100%" y1="0%" y2="100%">
+                <stop offset="0%" stopColor="#ffffff" />
+                <stop offset="100%" stopColor="#f1f6ec" />
+              </linearGradient>
+              <marker
+                id="d3-preview-arrow"
+                markerHeight="8"
+                markerWidth="8"
+                orient="auto"
+                refX="7"
+                refY="4"
+                viewBox="0 0 8 8"
+              >
+                <path d="M0 0 L8 4 L0 8 Z" fill="#7f9888" />
+              </marker>
+            </defs>
+            <rect width="560" height="340" rx="18" fill="#f7faf4" />
+            <path d="M38 286 C142 226 236 238 332 176 C420 120 478 90 530 54" fill="none" stroke="#e2eadf" strokeDasharray="7 10" strokeWidth="3" />
+            <g>{renderD3Preview(preview.diagram, preview.data)}</g>
           </svg>
         ) : (
           <VisualPreviewEmpty label={preview.label} />
@@ -208,10 +229,10 @@ function renderD3Preview(diagram: D3DiagramKind, data: unknown) {
 
 function TimelinePreview({ points }: { points: PreviewPoint[] }) {
   const labels = points.map((point) => point.label);
-  const xScale = scalePoint<string>().domain(labels).range([0, 300]).padding(0.28);
+  const xScale = scalePoint<string>().domain(labels).range([64, 496]).padding(0.32);
   const yScale = scaleLinear()
     .domain([0, Math.max(max(points, (point) => point.value) ?? 1, 1)])
-    .range([122, 30]);
+    .range([222, 92]);
   const path =
     d3Line<PreviewPoint>()
       .x((point) => xScale(point.label) ?? 0)
@@ -220,16 +241,36 @@ function TimelinePreview({ points }: { points: PreviewPoint[] }) {
 
   return (
     <g>
-      <path d={path} fill="none" stroke="#2f6d3b" strokeLinecap="round" strokeWidth="5" />
-      {points.map((point) => {
+      <text fill="#6f7f75" fontSize="14" fontWeight="800" x="38" y="44">
+        TIMELINE CONTRACT
+      </text>
+      <path d={path} fill="none" stroke="#2f6d3b" strokeLinecap="round" strokeWidth="7" />
+      <path d={path} fill="none" stroke="#d7b36f" opacity="0.32" strokeLinecap="round" strokeWidth="16" />
+      {points.slice(0, 6).map((point, index) => {
         const x = xScale(point.label) ?? 0;
         const y = yScale(point.value);
 
         return (
           <g key={point.label}>
-            <circle cx={x} cy={y} fill="#d7b36f" r="9" />
-            <text x={x} y="154" textAnchor="middle">
-              {shortLabel(point.label)}
+            <rect
+              fill="url(#d3-preview-card)"
+              filter="url(#d3-preview-shadow)"
+              height="54"
+              rx="12"
+              width="104"
+              x={x - 52}
+              y={index % 2 === 0 ? y + 28 : y - 82}
+            />
+            <circle cx={x} cy={y} fill={index === 0 ? "#2f6d3b" : "#d7b36f"} r="14" stroke="#ffffff" strokeWidth="5" />
+            <text
+              fill="#17352f"
+              fontSize="13"
+              fontWeight="900"
+              textAnchor="middle"
+              x={x}
+              y={index % 2 === 0 ? y + 60 : y - 50}
+            >
+              {shortLabel(point.label, 12)}
             </text>
           </g>
         );
@@ -240,78 +281,150 @@ function TimelinePreview({ points }: { points: PreviewPoint[] }) {
 
 function DistributionPreview({ points }: { points: PreviewPoint[] }) {
   const maxValue = Math.max(max(points, (point) => point.value) ?? 1, 1);
-  const widthScale = scaleLinear().domain([0, maxValue]).range([24, 292]);
+  const widthScale = scaleLinear().domain([0, maxValue]).range([70, 360]);
 
   return (
-    <g>
-      {points.slice(0, 4).map((point, index) => (
-        <g key={point.label} transform={`translate(0 ${index * 40})`}>
-          <text x="0" y="11">
-            {shortLabel(point.label, 20)}
-          </text>
-          <rect fill="#e5eadb" height="18" rx="5" width="304" x="0" y="18" />
-          <rect
-            fill={index % 2 === 0 ? "#2f6d3b" : "#d7b36f"}
-            height="18"
-            rx="5"
-            width={widthScale(point.value)}
-            x="0"
-            y="18"
-          />
-        </g>
-      ))}
+    <g transform="translate(50 56)">
+      <text fill="#6f7f75" fontSize="14" fontWeight="800" x="0" y="-18">
+        DISTRIBUTION
+      </text>
+      {points.slice(0, 5).map((point, index) => {
+        const y = index * 48;
+        const barWidth = widthScale(point.value);
+        const percent = Math.round((point.value / maxValue) * 100);
+
+        return (
+          <g key={point.label} transform={`translate(0 ${y})`}>
+            <text fill="#17352f" fontSize="15" fontWeight="900" x="0" y="15">
+              {shortLabel(point.label, 18)}
+            </text>
+            <rect fill="#e6ecdf" height="20" rx="10" width="380" x="120" y="0" />
+            <rect
+              fill={index % 2 === 0 ? "#2f6d3b" : "#d7b36f"}
+              height="20"
+              rx="10"
+              width={barWidth}
+              x="120"
+              y="0"
+            />
+            <text fill="#53665c" fontSize="13" fontWeight="900" textAnchor="end" x="538" y="15">
+              {percent}%
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 }
 
 function RelationshipPreview({ data }: { data: RelationshipData }) {
-  const radius = 58;
-  const centerX = 152;
-  const centerY = 82;
-  const positions = new Map(
-    data.nodes.map((node, index) => {
-      const angle = (index / Math.max(data.nodes.length, 1)) * Math.PI * 2 - Math.PI / 2;
-      return [
-        node,
-        {
-          x: centerX + Math.cos(angle) * radius,
-          y: centerY + Math.sin(angle) * radius
-        }
-      ];
-    })
-  );
+  const nodes = data.nodes.slice(0, 6);
+  const primary = nodes[0] ?? "Core";
+  const slots = [
+    { x: 44, y: 80, anchorX: 170, anchorY: 110 },
+    { x: 386, y: 80, anchorX: 386, anchorY: 110 },
+    { x: 44, y: 204, anchorX: 170, anchorY: 234 },
+    { x: 386, y: 204, anchorX: 386, anchorY: 234 },
+    { x: 216, y: 260, anchorX: 278, anchorY: 260 }
+  ];
+  const hub = { x: 280, y: 162 };
+  const positions = new Map<string, { x: number; y: number; anchorX: number; anchorY: number }>();
+  positions.set(primary, { x: 210, y: 126, anchorX: hub.x, anchorY: hub.y });
+  nodes.slice(1).forEach((node, index) => {
+    const slot = slots[index] ?? slots[slots.length - 1]!;
+    positions.set(node, slot);
+  });
+  const visibleLinks = data.links
+    .filter(([source, target]) => positions.has(source) && positions.has(target))
+    .slice(0, 9);
+  const fallbackLinks = nodes
+    .slice(1)
+    .map((node) => [primary, node] as [string, string])
+    .slice(0, 5);
+  const links = visibleLinks.length > 0 ? visibleLinks : fallbackLinks;
 
   return (
     <g>
-      {data.links.map(([source, target]) => {
+      <text fill="#6f7f75" fontSize="14" fontWeight="800" x="38" y="42">
+        RELATIONSHIP MAP
+      </text>
+      <circle cx={hub.x} cy={hub.y} fill="#e8efe5" r="96" />
+      <circle cx={hub.x} cy={hub.y} fill="none" opacity="0.65" r="116" stroke="#dbe6d8" strokeDasharray="6 10" strokeWidth="3" />
+      {links.map(([source, target], index) => {
         const start = positions.get(source);
         const end = positions.get(target);
 
-        return start && end ? (
-          <line
-            key={`${source}-${target}`}
-            stroke="#9fb3a2"
-            strokeLinecap="round"
-            strokeWidth="4"
-            x1={start.x}
-            x2={end.x}
-            y1={start.y}
-            y2={end.y}
-          />
-        ) : null;
-      })}
-      {data.nodes.map((node, index) => {
-        const position = positions.get(node) ?? { x: centerX, y: centerY };
+        if (!start || !end) {
+          return null;
+        }
 
         return (
-          <g key={node}>
-            <circle cx={position.x} cy={position.y} fill={index === 0 ? "#2f6d3b" : "#d7b36f"} r="18" />
-            <text x={position.x} y={position.y + 34} textAnchor="middle">
-              {shortLabel(node, 14)}
-            </text>
-          </g>
+          <path
+            d={`M ${start.anchorX} ${start.anchorY} C ${hub.x} ${start.anchorY}, ${hub.x} ${end.anchorY}, ${end.anchorX} ${end.anchorY}`}
+            fill="none"
+            key={`${source}-${target}-${index}`}
+            markerEnd="url(#d3-preview-arrow)"
+            opacity="0.82"
+            stroke="#8fa698"
+            strokeLinecap="round"
+            strokeWidth="4"
+          />
         );
       })}
+      <NodeCard
+        accent="#2f6d3b"
+        height={72}
+        label={primary}
+        subtitle="core"
+        width={140}
+        x={210}
+        y={126}
+      />
+      {nodes.slice(1).map((node, index) => {
+        const slot = positions.get(node) ?? slots[0]!;
+
+        return (
+          <NodeCard
+            accent={index % 2 === 0 ? "#d7b36f" : "#c89437"}
+            key={node}
+            label={node}
+            subtitle={`node ${index + 1}`}
+            x={slot.x}
+            y={slot.y}
+          />
+        );
+      })}
+    </g>
+  );
+}
+
+function NodeCard({
+  accent,
+  height = 60,
+  label,
+  subtitle,
+  width = 128,
+  x,
+  y
+}: {
+  accent: string;
+  height?: number;
+  label: string;
+  subtitle: string;
+  width?: number;
+  x: number;
+  y: number;
+}) {
+  return (
+    <g filter="url(#d3-preview-shadow)">
+      <rect fill="url(#d3-preview-card)" height={height} rx="14" width={width} x={x} y={y} />
+      <rect fill={accent} height={height} rx="14" width="8" x={x} y={y} />
+      <text fill="#17352f" fontSize="15" fontWeight="900" x={x + 18} y={y + 28}>
+        {shortLabel(label, 12)}
+      </text>
+      <text fill="#6f7f75" fontSize="11" fontWeight="800" x={x + 18} y={y + 48}>
+        {subtitle}
+      </text>
     </g>
   );
 }
@@ -322,24 +435,41 @@ function TreePreview({ data }: { data: TreeData }) {
     children: data.children.slice(0, 5).map((name) => ({ name }))
   };
   const root = hierarchy<TreeNodeData>(rootData);
-  const layout = d3Tree<TreeNodeData>().size([270, 118])(root);
+  const layout = d3Tree<TreeNodeData>().size([430, 168])(root);
 
   return (
-    <g transform="translate(16 8)">
+    <g transform="translate(64 70)">
+      <text fill="#6f7f75" fontSize="14" fontWeight="800" x="-26" y="-28">
+        TEACHING TREE
+      </text>
       {layout.links().map((link) => (
         <path
           d={`M ${link.source.x} ${link.source.y} C ${link.source.x} ${(link.source.y + link.target.y) / 2}, ${link.target.x} ${(link.source.y + link.target.y) / 2}, ${link.target.x} ${link.target.y}`}
           fill="none"
           key={`${link.source.data.name}-${link.target.data.name}`}
           stroke="#9fb3a2"
-          strokeWidth="4"
+          strokeLinecap="round"
+          strokeWidth="5"
         />
       ))}
       {layout.descendants().map((node) => (
-        <g key={node.data.name} transform={`translate(${node.x} ${node.y})`}>
-          <circle fill={node.depth === 0 ? "#2f6d3b" : "#d7b36f"} r={node.depth === 0 ? 18 : 13} />
-          <text textAnchor="middle" y={node.depth === 0 ? -26 : 30}>
-            {shortLabel(node.data.name, 15)}
+        <g filter="url(#d3-preview-shadow)" key={node.data.name} transform={`translate(${node.x} ${node.y})`}>
+          <rect
+            fill={node.depth === 0 ? "#2f6d3b" : "url(#d3-preview-card)"}
+            height={node.depth === 0 ? 56 : 46}
+            rx="12"
+            width={node.depth === 0 ? 132 : 112}
+            x={node.depth === 0 ? -66 : -56}
+            y={node.depth === 0 ? -28 : -23}
+          />
+          <text
+            fill={node.depth === 0 ? "#ffffff" : "#17352f"}
+            fontSize={node.depth === 0 ? 14 : 12}
+            fontWeight="900"
+            textAnchor="middle"
+            y="5"
+          >
+            {shortLabel(node.data.name, node.depth === 0 ? 13 : 11)}
           </text>
         </g>
       ))}

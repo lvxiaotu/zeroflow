@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -23,6 +23,20 @@ type ProviderResponse = {
   health: ClientProviderHealth[];
 };
 
+type PromptPreset = {
+  id: string;
+  kind: "style";
+  target: string;
+  label: string;
+  enabled: boolean;
+  promptSuffix: string;
+  updatedAt?: string;
+};
+
+type PromptPresetResponse = {
+  presets: PromptPreset[];
+};
+
 const providerGuides: Record<
   ClientProviderHealth["id"],
   {
@@ -39,7 +53,7 @@ const providerGuides: Record<
     liveCost: "external"
   },
   yunwu: {
-    role: "Sketch and image generation",
+    role: "Image generation",
     jobTypes: "generate-image",
     env: ["YUNWU_API_KEY", "YUNWU_BASE_URL", "YUNWU_IMAGE_MODEL"],
     liveCost: "external"
@@ -56,9 +70,9 @@ const providerGuides: Record<
     liveCost: "external"
   },
   astrochart: {
-    role: "Natal chart SVG renderer",
+    role: "Natal chart SVG rendering and ephemeris calculation",
     jobTypes: "generate-chart",
-    env: [],
+    env: ["SWISS_EPHEMERIS_PATH"],
     liveCost: "local"
   }
 };
@@ -77,10 +91,17 @@ export function ProviderSettingsDashboard() {
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [ttsDryRun, setTtsDryRun] = useState(true);
   const [runningMode, setRunningMode] = useState<VerifyResult["mode"] | null>(null);
+  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
+  const [promptPresetStatus, setPromptPresetStatus] = useState("Prompt presets loading");
+  const [savingPromptPresets, setSavingPromptPresets] = useState(false);
 
   const healthById = useMemo(
     () => new Map(health.map((provider) => [provider.id, provider])),
     [health]
+  );
+  const stylePromptPresets = useMemo(
+    () => promptPresets.filter((preset) => preset.kind === "style"),
+    [promptPresets]
   );
 
   async function loadProviderStatus() {
@@ -98,8 +119,23 @@ export function ProviderSettingsDashboard() {
     setStatusText("Provider status synced");
   }
 
+  async function loadPromptPresets() {
+    setPromptPresetStatus("Refreshing prompt presets");
+    const response = await fetch("/api/image-prompt-presets");
+
+    if (!response.ok) {
+      setPromptPresetStatus("Prompt presets unavailable");
+      return;
+    }
+
+    const payload = (await response.json()) as PromptPresetResponse;
+    setPromptPresets(payload.presets);
+    setPromptPresetStatus("Prompt presets synced");
+  }
+
   useEffect(() => {
     void loadProviderStatus();
+    void loadPromptPresets();
   }, []);
 
   async function verifyProviders(mode: VerifyResult["mode"]) {
@@ -126,6 +162,33 @@ export function ProviderSettingsDashboard() {
     setStatusText("Provider check complete");
   }
 
+  async function savePromptPresets() {
+    setSavingPromptPresets(true);
+    setPromptPresetStatus("Saving prompt presets");
+    const response = await fetch("/api/image-prompt-presets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presets: promptPresets })
+    });
+
+    setSavingPromptPresets(false);
+
+    if (!response.ok) {
+      setPromptPresetStatus("Prompt preset save failed");
+      return;
+    }
+
+    const payload = (await response.json()) as PromptPresetResponse;
+    setPromptPresets(payload.presets);
+    setPromptPresetStatus("Prompt presets saved");
+  }
+
+  function updatePromptPreset(id: string, updates: Partial<PromptPreset>) {
+    setPromptPresets((current) =>
+      current.map((preset) => (preset.id === id ? { ...preset, ...updates } : preset))
+    );
+  }
+
   return (
     <main className="management-shell provider-settings-shell">
       <header className="management-header">
@@ -150,7 +213,9 @@ export function ProviderSettingsDashboard() {
         </div>
         <div>
           <span>Ready</span>
-          <strong>{readyCount(health)} / {health.length || providerOrder.length}</strong>
+          <strong>
+            {readyCount(health)} / {health.length || providerOrder.length}
+          </strong>
         </div>
         <div>
           <span>External</span>
@@ -168,7 +233,11 @@ export function ProviderSettingsDashboard() {
           const enabled = providers?.[providerId] ?? provider?.ready ?? false;
 
           return (
-            <article className="provider-settings-card" data-status={provider?.status} key={providerId}>
+            <article
+              className="provider-settings-card"
+              data-status={provider?.status}
+              key={providerId}
+            >
               <header>
                 <div>
                   <span>{guide.role}</span>
@@ -194,6 +263,35 @@ export function ProviderSettingsDashboard() {
             </article>
           );
         })}
+      </section>
+
+      <section className="provider-settings-console image-prompt-presets" aria-label="Image prompt presets">
+        <header>
+          <div>
+            <span className="eyeline">Image Prompt Presets</span>
+            <strong>图像提示词预设</strong>
+          </div>
+          <div className="provider-settings-actions">
+            <span>{promptPresetStatus}</span>
+            <button
+              disabled={savingPromptPresets}
+              type="button"
+              onClick={() => void savePromptPresets()}
+            >
+              保存预设
+            </button>
+          </div>
+        </header>
+        <p className="prompt-preset-note">
+          只有当前选择的风格启用了追加提示词，并且文本不为空时，才会追加到你的原始提示词末尾。
+        </p>
+        <div className="prompt-preset-groups">
+          <PromptPresetGroup
+            presets={stylePromptPresets}
+            title="风格"
+            onChange={updatePromptPreset}
+          />
+        </div>
       </section>
 
       <section className="provider-settings-console" aria-label="Provider checks">
@@ -240,7 +338,53 @@ export function ProviderSettingsDashboard() {
   );
 }
 
-function ProviderCheckList({ checks, mode }: { checks: ProviderCheck[]; mode: VerifyResult["mode"] }) {
+function PromptPresetGroup({
+  presets,
+  title,
+  onChange
+}: {
+  presets: PromptPreset[];
+  title: string;
+  onChange: (id: string, updates: Partial<PromptPreset>) => void;
+}) {
+  return (
+    <section className="prompt-preset-group" aria-label={`${title} prompt presets`}>
+      <h3>{title}</h3>
+      <div className="prompt-preset-grid">
+        {presets.map((preset) => (
+          <article className="prompt-preset-card" key={preset.id}>
+            <header>
+              <strong>{preset.label}</strong>
+              <label>
+                <input
+                  checked={preset.enabled}
+                  onChange={(event) => onChange(preset.id, { enabled: event.currentTarget.checked })}
+                  type="checkbox"
+                />
+                启用追加
+              </label>
+            </header>
+            <textarea
+              aria-label={`${preset.label} 追加提示词`}
+              onChange={(event) => onChange(preset.id, { promptSuffix: event.currentTarget.value })}
+              placeholder="这里填写要追加到提示词末尾的文字"
+              rows={4}
+              value={preset.promptSuffix}
+            />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProviderCheckList({
+  checks,
+  mode
+}: {
+  checks: ProviderCheck[];
+  mode: VerifyResult["mode"];
+}) {
   return (
     <div className="provider-check-list">
       <span>{mode} results</span>
@@ -295,5 +439,5 @@ function fallbackProviderLabel(providerId: ClientProviderHealth["id"]) {
   if (providerId === "runninghub") {
     return "RunningHub IndexTTS";
   }
-  return "AstroChart SVG";
+  return "AstroChart + Swiss Ephemeris";
 }

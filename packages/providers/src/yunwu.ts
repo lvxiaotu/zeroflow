@@ -14,7 +14,7 @@ type ImageResponse = {
 export function createYunwuImageProvider(): ImageProvider {
   const apiKey = readEnv("YUNWU_API_KEY");
   const baseUrl = readEnv("YUNWU_BASE_URL") ?? "https://yunwu.ai/v1";
-  const defaultModel = readEnv("YUNWU_IMAGE_MODEL") ?? "gpt-image-2";
+  const defaultModel = normalizeImageModel(readEnv("YUNWU_IMAGE_MODEL"), "gpt-image-2");
   const mock = createMockImageProvider();
 
   if (!apiKey) {
@@ -23,6 +23,9 @@ export function createYunwuImageProvider(): ImageProvider {
 
   return {
     async generateImage(input) {
+      const model = normalizeImageModel(input.model, defaultModel);
+      const size = input.size ?? "1024x1536";
+
       try {
         const response = await fetch(`${baseUrl.replace(/\/$/, "")}/images/generations`, {
           method: "POST",
@@ -31,9 +34,9 @@ export function createYunwuImageProvider(): ImageProvider {
             Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({
-            model: input.model ?? defaultModel,
+            model,
             prompt: input.prompt,
-            size: input.size ?? "1024x1536"
+            size
           })
         });
 
@@ -47,9 +50,14 @@ export function createYunwuImageProvider(): ImageProvider {
           return mock.generateImage(input);
         }
 
+        let assetPath: string | undefined;
+
         if (item.b64_json && input.outputPath) {
           await fs.mkdir(path.dirname(input.outputPath), { recursive: true });
           await fs.writeFile(input.outputPath, Buffer.from(item.b64_json, "base64"));
+          assetPath = input.outputPath;
+        } else if (item.url && input.outputPath) {
+          assetPath = await downloadImageAsset(item.url, input.outputPath);
         }
 
         return {
@@ -57,7 +65,9 @@ export function createYunwuImageProvider(): ImageProvider {
           usedMock: false,
           data: {
             prompt: input.prompt,
-            assetPath: item.b64_json ? input.outputPath : undefined,
+            model,
+            size,
+            assetPath,
             url: item.url,
             b64Json: item.b64_json
           },
@@ -68,4 +78,67 @@ export function createYunwuImageProvider(): ImageProvider {
       }
     }
   };
+}
+
+function normalizeImageModel(model: string | undefined, fallback: string) {
+  const normalized = model?.trim();
+
+  if (!normalized || !isImageGenerationModel(normalized)) {
+    return fallback;
+  }
+
+  return normalized;
+}
+
+function isImageGenerationModel(model: string) {
+  const normalized = model.toLowerCase();
+
+  return (
+    normalized.includes("image") ||
+    normalized.startsWith("img-") ||
+    normalized.startsWith("dall-e")
+  );
+}
+
+async function downloadImageAsset(url: string, outputPath: string) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    return undefined;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const assetPath = resolveDownloadedImagePath(outputPath, contentType, url);
+  const bytes = Buffer.from(await response.arrayBuffer());
+
+  await fs.mkdir(path.dirname(assetPath), { recursive: true });
+  await fs.writeFile(assetPath, bytes);
+
+  return assetPath;
+}
+
+function resolveDownloadedImagePath(outputPath: string, contentType: string, url: string) {
+  const extension = imageExtensionFromContentType(contentType) ?? imageExtensionFromUrl(url);
+
+  if (!extension || path.extname(outputPath).toLowerCase() === extension) {
+    return outputPath;
+  }
+
+  return path.join(path.dirname(outputPath), `${path.basename(outputPath, path.extname(outputPath))}${extension}`);
+}
+
+function imageExtensionFromContentType(contentType: string) {
+  if (contentType.includes("image/png")) return ".png";
+  if (contentType.includes("image/jpeg")) return ".jpg";
+  if (contentType.includes("image/webp")) return ".webp";
+  return undefined;
+}
+
+function imageExtensionFromUrl(url: string) {
+  try {
+    const extension = path.extname(new URL(url).pathname).toLowerCase();
+    return [".png", ".jpg", ".jpeg", ".webp"].includes(extension) ? extension : undefined;
+  } catch {
+    return undefined;
+  }
 }

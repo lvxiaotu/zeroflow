@@ -11,18 +11,26 @@ const fallbackLabels: Record<ClientProviderHealth["id"], string> = {
   deepseek: "DeepSeek",
   yunwu: "Yunwu Image",
   runninghub: "RunningHub IndexTTS",
-  astrochart: "AstroChart SVG"
+  astrochart: "AstroChart + Swiss Ephemeris"
 };
 
 export async function fetchProviderHealth() {
-  const response = await fetch("/api/providers/check");
+  try {
+    const response = await fetch("/api/providers/check");
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json()) as { health?: ClientProviderHealth[] };
+    return Array.isArray(payload.health) ? payload.health : [];
+  } catch (error) {
+    if (isAbortError(error)) {
+      return [];
+    }
+
     return [];
   }
-
-  const payload = (await response.json()) as { health?: ClientProviderHealth[] };
-  return Array.isArray(payload.health) ? payload.health : [];
 }
 
 export function summarizeProviderHealth(health: ClientProviderHealth[]) {
@@ -34,4 +42,13 @@ export function summarizeProviderHealth(health: ClientProviderHealth[]) {
     .filter((item) => item.id !== "astrochart")
     .map((item) => `${fallbackLabels[item.id]}: ${item.status}`)
     .join(" / ");
+}
+
+function isAbortError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
 }

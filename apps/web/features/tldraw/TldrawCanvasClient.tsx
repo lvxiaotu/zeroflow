@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   canvasDocumentSchema,
@@ -55,8 +55,11 @@ import {
   getAiModelOptionsForKind,
   getAiModelTarget,
   getNodeAiModel,
+  getNodeImageStyle,
   getSceneImageModel,
-  imageModelOptions
+  getSceneImageStyle,
+  imageModelOptions,
+  imageStyleOptions
 } from "../canvas/aiModels";
 import {
   getAiPromptDataKey,
@@ -66,15 +69,31 @@ import {
   getAiPromptValue
 } from "../canvas/aiNodeInputs";
 import {
-  getTargetDurationSec,
   getDefaultChapterCount,
+  getDefaultChapterSceneCount,
   getDefaultSceneCount,
+  getTargetDurationSec,
+  storyboardStructureThresholdSec,
   targetDurationOptions
 } from "../canvas/videoDurationOptions";
 import {
   getCreateExportJobRequest,
+  getCreateProjectExportJobRequest,
+  getCreatePreviewFlowJobRequest,
   getCreatePreviewJobRequest
 } from "../canvas/productionFlowJobs";
+import {
+  ChartHighlightChildrenEditor,
+  ChartHighlightNodeEditor
+} from "../canvas/ChartHighlightChildrenEditor";
+import {
+  createChartHighlightChild,
+  getChartHighlightNodes,
+  getChartHighlightSourceChart,
+  removeChartHighlightChild,
+  updateChartHighlightChild,
+  type ChartHighlightDataPatch
+} from "../canvas/chartHighlightNodes";
 import {
   canvasFromTldraw,
   getSelectedZeroFlowNodeIds,
@@ -95,13 +114,42 @@ const defaultChartBirthData = {
   birthDate: "1990-01-01",
   birthTime: "12:00",
   timezoneOffsetMinutes: 480,
+  timezone: "Asia/Shanghai",
   latitude: 39.9042,
   longitude: 116.4074,
   placeName: "Beijing",
   houseSystem: "equal",
+  zodiacMode: "tropical",
+  siderealAyanamsa: "lahiri",
+  planetSet: "modern",
+  nodeType: "mean",
   chartType: "natal",
   highlight: "ascendant"
 };
+
+const chartHouseSystemOptions = [
+  { value: "placidus", label: "Placidus" },
+  { value: "whole-sign", label: "Whole Sign" },
+  { value: "equal", label: "Equal" },
+  { value: "koch", label: "Koch" },
+  { value: "porphyry", label: "Porphyry" },
+  { value: "regiomontanus", label: "Regiomontanus" },
+  { value: "campanus", label: "Campanus" },
+  { value: "alcabitus", label: "Alcabitus" },
+  { value: "sripati", label: "Sripati" },
+  { value: "morinus", label: "Morinus" }
+];
+
+const chartAyanamsaOptions = [
+  { value: "lahiri", label: "Lahiri" },
+  { value: "raman", label: "Raman" },
+  { value: "fagan-bradley", label: "Fagan-Bradley" },
+  { value: "krishnamurti", label: "Krishnamurti" },
+  { value: "yukteshwar", label: "Yukteshwar" },
+  { value: "true-citra", label: "True Citra" },
+  { value: "true-revati", label: "True Revati" },
+  { value: "lahiri-icrc", label: "Lahiri ICRC" }
+];
 
 declare global {
   interface Window {
@@ -133,20 +181,18 @@ export function TldrawCanvasClient({
   const editorRef = useRef<Editor | null>(null);
   const canvasRef = useRef<CanvasDocument | null>(null);
   const edgeSyncTimerRef = useRef<number | null>(null);
+  const saveCanvasPromiseRef = useRef<Promise<CanvasDocument | null> | null>(null);
   const [canvas, setCanvas] = useState<CanvasDocument | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [statusText, setStatusText] = useState("Loading project");
-  const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+  const [runningNodeIds, setRunningNodeIds] = useState<Set<string>>(() => new Set());
   const [providerHealth, setProviderHealth] = useState<ClientProviderHealth[]>([]);
 
   canvasRef.current = canvas;
 
-  const spec = useMemo(
-    () => (canvas ? compileCanvasToAstroVideoSpec(canvas) : null),
-    [canvas]
-  );
+  const spec = useMemo(() => (canvas ? compileCanvasToAstroVideoSpec(canvas) : null), [canvas]);
   const selectedNode = useMemo(() => {
     if (!canvas || selectedNodeIds.length !== 1) {
       return null;
@@ -154,6 +200,20 @@ export function TldrawCanvasClient({
 
     return canvas.nodes.find((node) => node.id === selectedNodeIds[0]) ?? null;
   }, [canvas, selectedNodeIds]);
+  const selectedChartHighlightNodes = useMemo(
+    () =>
+      canvas && selectedNode?.kind === "chart"
+        ? getChartHighlightNodes(canvas, selectedNode)
+        : [],
+    [canvas, selectedNode]
+  );
+  const selectedChartHighlightSourceNode = useMemo(
+    () =>
+      canvas && selectedNode?.kind === "chart-highlight"
+        ? getChartHighlightSourceChart(canvas, selectedNode)
+        : undefined,
+    [canvas, selectedNode]
+  );
 
   const applyCanvas = useCallback((nextCanvas: CanvasDocument, reloadEditor = false) => {
     setCanvas(nextCanvas);
@@ -269,6 +329,10 @@ export function TldrawCanvasClient({
   }, []);
 
   const saveTldrawCanvas = useCallback(async () => {
+    if (saveCanvasPromiseRef.current) {
+      return saveCanvasPromiseRef.current;
+    }
+
     const editor = editorRef.current;
     const currentCanvas = canvasRef.current;
 
@@ -277,32 +341,51 @@ export function TldrawCanvasClient({
     }
 
     const nextCanvas = canvasFromTldraw(editor, currentCanvas);
-    setSaveState("saving");
-    setStatusText("Syncing canvas");
+
+    const savePromise = (async () => {
+      setSaveState("saving");
+      setStatusText("Syncing canvas");
+
+      try {
+        const response = await fetch("/api/project/canvas", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId, canvas: nextCanvas })
+        });
+
+        if (!response.ok) {
+          throw new Error("canvas save failed");
+        }
+
+        const payload = (await response.json()) as { project?: { canvas?: unknown } };
+        const parsed = canvasDocumentSchema.safeParse(payload.project?.canvas);
+        const savedCanvas = parsed.success ? parsed.data : nextCanvas;
+
+        applyCanvas(savedCanvas);
+        setSaveState("saved");
+        setStatusText("Canvas synced");
+        return savedCanvas;
+      } catch (error) {
+        if (isAbortError(error)) {
+          setSaveState("unsaved");
+          setStatusText("Canvas sync was cancelled; using local canvas");
+          return canvasRef.current;
+        }
+
+        setSaveState("error");
+        setStatusText("Canvas sync failed");
+        return null;
+      }
+    })();
+
+    saveCanvasPromiseRef.current = savePromise;
 
     try {
-      const response = await fetch("/api/project/canvas", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, canvas: nextCanvas })
-      });
-
-      if (!response.ok) {
-        throw new Error("canvas save failed");
+      return await savePromise;
+    } finally {
+      if (saveCanvasPromiseRef.current === savePromise) {
+        saveCanvasPromiseRef.current = null;
       }
-
-      const payload = (await response.json()) as { project?: { canvas?: unknown } };
-      const parsed = canvasDocumentSchema.safeParse(payload.project?.canvas);
-      const savedCanvas = parsed.success ? parsed.data : nextCanvas;
-
-      applyCanvas(savedCanvas);
-      setSaveState("saved");
-      setStatusText("Canvas synced");
-      return savedCanvas;
-    } catch {
-      setSaveState("error");
-      setStatusText("Canvas sync failed");
-      return null;
     }
   }, [applyCanvas, projectId]);
 
@@ -326,7 +409,7 @@ export function TldrawCanvasClient({
       }
 
       setSaveState("saving");
-      setRunningNodeId(node.id);
+      setRunningNodeIds((current) => new Set(current).add(node.id));
       setStatusText(`Running ${draftJobRequest.type}`);
 
       try {
@@ -374,12 +457,20 @@ export function TldrawCanvasClient({
         setSaveState("saved");
         setStatusText(`${draftJobRequest.type} completed`);
       } catch (error) {
+        if (isAbortError(error)) {
+          setSaveState("unsaved");
+          setStatusText(`${draftJobRequest.type} request was cancelled; please retry`);
+          return;
+        }
+
         setSaveState("error");
-        setStatusText(
-          error instanceof Error ? error.message : `${draftJobRequest.type} failed`
-        );
+        setStatusText(error instanceof Error ? error.message : `${draftJobRequest.type} failed`);
       } finally {
-        setRunningNodeId(null);
+        setRunningNodeIds((current) => {
+          const next = new Set(current);
+          next.delete(node.id);
+          return next;
+        });
       }
     },
     [loadProjectCanvas, projectId, saveTldrawCanvas]
@@ -500,12 +591,7 @@ export function TldrawCanvasClient({
     [updateCanvasNode]
   );
   const updateCaptionCue = useCallback(
-    (
-      nodeId: string,
-      cueId: string,
-      key: CaptionCueChangeKey,
-      value: string | number
-    ) =>
+    (nodeId: string, cueId: string, key: CaptionCueChangeKey, value: string | number) =>
       updateCaptionCues(nodeId, (cues) =>
         cues.map((cue) =>
           cue.id === cueId
@@ -541,6 +627,94 @@ export function TldrawCanvasClient({
       updateCaptionCues(nodeId, (cues) => cues.filter((cue) => cue.id !== cueId)),
     [updateCaptionCues]
   );
+
+  const addChartHighlightNode = useCallback(
+    (chartNode: CanvasNode) => {
+      const currentCanvas = canvasRef.current;
+
+      if (!currentCanvas) {
+        return;
+      }
+
+      const editor = editorRef.current;
+      const baseCanvas = editor ? canvasFromTldraw(editor, currentCanvas) : currentCanvas;
+      const result = createChartHighlightChild(baseCanvas, chartNode);
+
+      applyCanvas(result.canvas, true);
+      setSaveState("unsaved");
+      setStatusText("Chart highlight child added");
+
+      if (editor && selectZeroFlowNode(editor, chartNode.id)) {
+        setSelectedNodeIds([chartNode.id]);
+      }
+    },
+    [applyCanvas]
+  );
+
+  const updateChartHighlightNode = useCallback(
+    (nodeId: string, patch: ChartHighlightDataPatch) => {
+      const currentCanvas = canvasRef.current;
+
+      if (!currentCanvas) {
+        return;
+      }
+
+      const editor = editorRef.current;
+      const baseCanvas = editor ? canvasFromTldraw(editor, currentCanvas) : currentCanvas;
+      const nextCanvas = updateChartHighlightChild(baseCanvas, nodeId, patch);
+
+      applyCanvas(nextCanvas);
+      setSaveState("unsaved");
+      setStatusText("Chart highlight child updated");
+
+      if (editor) {
+        updateTldrawNodeShapes(editor, nextCanvas);
+        syncTldrawEdges(editor, nextCanvas);
+      }
+    },
+    [applyCanvas]
+  );
+
+  const deleteChartHighlightNode = useCallback(
+    (nodeId: string) => {
+      const currentCanvas = canvasRef.current;
+
+      if (!currentCanvas) {
+        return;
+      }
+
+      const node = currentCanvas.nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        setStatusText("Chart highlight child does not exist");
+        return;
+      }
+
+      const confirmed = window.confirm(`删除星盘高亮“${getString(node.data.title, node.id)}”？`);
+      if (!confirmed) {
+        setStatusText("Delete cancelled");
+        return;
+      }
+
+      const editor = editorRef.current;
+      const baseCanvas = editor ? canvasFromTldraw(editor, currentCanvas) : currentCanvas;
+      const nextCanvas = removeChartHighlightChild(baseCanvas, nodeId);
+
+      applyCanvas(nextCanvas, true);
+      setSaveState("unsaved");
+      setStatusText("Chart highlight child deleted");
+    },
+    [applyCanvas]
+  );
+
+  const selectChartHighlightNode = useCallback((nodeId: string) => {
+    const editor = editorRef.current;
+
+    if (editor && !selectZeroFlowNode(editor, nodeId)) {
+      return;
+    }
+
+    setSelectedNodeIds([nodeId]);
+  }, []);
 
   useEffect(() => {
     const handleNodeAction = (event: Event) => {
@@ -652,6 +826,17 @@ export function TldrawCanvasClient({
     editorRef.current?.zoomToFit();
   }
 
+  function createProjectExport() {
+    const anchorNodeId = selectedNodeIds[0] ?? canvasRef.current?.nodes[0]?.id;
+
+    if (!anchorNodeId) {
+      setStatusText("No node available for project export");
+      return;
+    }
+
+    void runNodeJobRequest(anchorNodeId, getCreateProjectExportJobRequest());
+  }
+
   return (
     <main className="tldraw-shell">
       <header className="tldraw-topbar">
@@ -663,12 +848,17 @@ export function TldrawCanvasClient({
           <span className="save-state" data-state={saveState}>
             {statusText}
           </span>
-          <Link href={`/studio/${encodeURIComponent(projectId)}?projectId=${encodeURIComponent(projectId)}`}>
+          <Link
+            href={`/studio/${encodeURIComponent(projectId)}?projectId=${encodeURIComponent(projectId)}`}
+          >
             Back to Studio
           </Link>
           <Link href="/providers">Providers</Link>
           <button type="button" onClick={fitView}>
             Fit
+          </button>
+          <button type="button" onClick={createProjectExport}>
+            全片导出
           </button>
           <button className="primary-action" type="button" onClick={() => void saveTldrawCanvas()}>
             Sync
@@ -690,7 +880,9 @@ export function TldrawCanvasClient({
           <span>{summarizeProviderHealth(providerHealth)}</span>
           <TldrawNodeInspector
             node={selectedNode}
-            running={runningNodeId === selectedNode?.id}
+            chartHighlightNodes={selectedChartHighlightNodes}
+            chartHighlightSourceNode={selectedChartHighlightSourceNode}
+            running={selectedNode ? runningNodeIds.has(selectedNode.id) : false}
             selectedCount={selectedNodeIds.length}
             onDataChange={updateNodeData}
             onDataPatch={updateNodeDataPatch}
@@ -699,6 +891,10 @@ export function TldrawCanvasClient({
             onCueRemove={removeCaptionCue}
             onRunNode={runNodeAction}
             onRunNodeJob={runNodeJobRequest}
+            onChartHighlightAdd={addChartHighlightNode}
+            onChartHighlightChange={updateChartHighlightNode}
+            onChartHighlightDelete={deleteChartHighlightNode}
+            onChartHighlightSelect={selectChartHighlightNode}
             onSizeChange={updateNodeSize}
           />
         </aside>
@@ -720,6 +916,8 @@ export function TldrawCanvasClient({
 
 function TldrawNodeInspector({
   node,
+  chartHighlightNodes,
+  chartHighlightSourceNode,
   running,
   selectedCount,
   onDataChange,
@@ -729,9 +927,15 @@ function TldrawNodeInspector({
   onCueRemove,
   onRunNode,
   onRunNodeJob,
+  onChartHighlightAdd,
+  onChartHighlightChange,
+  onChartHighlightDelete,
+  onChartHighlightSelect,
   onSizeChange
 }: {
   node: CanvasNode | null;
+  chartHighlightNodes: CanvasNode[];
+  chartHighlightSourceNode?: CanvasNode;
   running: boolean;
   selectedCount: number;
   onDataChange: (nodeId: string, key: string, value: string | number | boolean) => boolean;
@@ -746,6 +950,10 @@ function TldrawNodeInspector({
   onCueRemove: (nodeId: string, cueId: string) => boolean;
   onRunNode: (nodeId: string) => Promise<void>;
   onRunNodeJob: (nodeId: string, request: NodeJobRequest) => Promise<void>;
+  onChartHighlightAdd: (chartNode: CanvasNode) => void;
+  onChartHighlightChange: (nodeId: string, patch: ChartHighlightDataPatch) => void;
+  onChartHighlightDelete: (nodeId: string) => void;
+  onChartHighlightSelect: (nodeId: string) => void;
   onSizeChange: (nodeId: string, size: CanvasNode["size"]) => void;
 }) {
   if (!node) {
@@ -761,6 +969,7 @@ function TldrawNodeInspector({
 
   const cues = getEditableCueRowsFromNode(node);
   const assetUrl = getNodeAssetUrl(node);
+  const assetPath = getString(node.data.assetPath, "");
   const visualRenderMode = getString(node.data.renderMode, assetUrl ? "asset" : "contract");
   const nodeJobRequest = getNodeJobRequest(node);
   const runnable = nodeJobRequest !== null;
@@ -772,6 +981,7 @@ function TldrawNodeInspector({
   const threeScene = getString(node.data.threeScene, "orbit");
   const threePreset = getThreeVisualPreset(getString(node.data.visualPreset, threeScene));
   const threeJsonStatus = threeDataJsonStatus(threeScene, getString(node.data.dataJson, ""));
+  const chartPipeline = node.kind === "chart" ? getChartPipelineSummary(node) : null;
   const cueTimelineDurationSec = captionTimelineDurationSec(
     cues,
     getNumber(node.data.durationSec, 0)
@@ -808,10 +1018,18 @@ function TldrawNodeInspector({
               {running ? "Running..." : "手写文案"}
             </button>
           ) : null}
-          <section
-            className="tldraw-provider-guard"
-            data-risk="local-or-mock"
-          >
+          {node.kind === "d3" ? (
+            <button
+              className="tldraw-inspector-run"
+              data-risk="local-or-mock"
+              disabled={running}
+              type="button"
+              onClick={() => void onRunNodeJob(node.id, { type: "export-visual-asset", input: {} })}
+            >
+              {running ? "Running..." : "导出视觉素材"}
+            </button>
+          ) : null}
+          <section className="tldraw-provider-guard" data-risk="local-or-mock">
             <strong>Ready to run</strong>
             <span>Jobs run immediately with the configured provider.</span>
           </section>
@@ -839,6 +1057,15 @@ function TldrawNodeInspector({
               );
             })}
           </div>
+          <button
+            className="tldraw-inspector-run"
+            data-risk="local-or-mock"
+            disabled={running}
+            type="button"
+            onClick={() => void onRunNodeJob(node.id, getCreatePreviewFlowJobRequest(node))}
+          >
+            {running ? "Running..." : "创建当前分镜预览"}
+          </button>
         </section>
       ) : null}
 
@@ -910,13 +1137,37 @@ function TldrawNodeInspector({
         </label>
       ) : null}
 
+      {node.kind === "image" ? (
+        <>
+          <label>
+            风格
+            <select
+              name="imageStyle"
+              value={getNodeImageStyle(node)}
+              onChange={(event) => onDataChange(node.id, "imageStyle", event.currentTarget.value)}
+            >
+              {imageStyleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            类型
+          </label>
+        </>
+      ) : null}
+
       {node.kind === "topic" ? (
         <label>
           文案风格
           <select
             name="scriptProfileId"
             value={getString(node.data.scriptProfileId, defaultScriptPromptProfileId)}
-            onChange={(event) => onDataChange(node.id, "scriptProfileId", event.currentTarget.value)}
+            onChange={(event) =>
+              onDataChange(node.id, "scriptProfileId", event.currentTarget.value)
+            }
           >
             {scriptPromptProfiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
@@ -937,7 +1188,9 @@ function TldrawNodeInspector({
           <select
             name="targetDurationSec"
             value={getTargetDurationSec(node.data.targetDurationSec)}
-            onChange={(event) => onDataChange(node.id, "targetDurationSec", Number(event.currentTarget.value))}
+            onChange={(event) =>
+              onDataChange(node.id, "targetDurationSec", Number(event.currentTarget.value))
+            }
           >
             {targetDurationOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -961,7 +1214,11 @@ function TldrawNodeInspector({
               getDefaultChapterCount(getTargetDurationSec(node.data.targetDurationSec))
             )}
             onChange={(event) =>
-              onDataChange(node.id, "chapterCount", clampNumber(Number(event.currentTarget.value), 1, 24))
+              onDataChange(
+                node.id,
+                "chapterCount",
+                clampNumber(Number(event.currentTarget.value), 1, 24)
+              )
             }
           />
         </label>
@@ -971,13 +1228,20 @@ function TldrawNodeInspector({
         <label>
           Scene count
           <input
-            max={12}
+            max={60}
             min={1}
             name="sceneCount"
             type="number"
-            value={getNumber(node.data.sceneCount, 5)}
+            value={getNumber(
+              node.data.sceneCount,
+              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+            )}
             onChange={(event) =>
-              onDataChange(node.id, "sceneCount", clampNumber(Number(event.currentTarget.value), 1, 12))
+              onDataChange(
+                node.id,
+                "sceneCount",
+                clampNumber(Number(event.currentTarget.value), 1, 60)
+              )
             }
           />
         </label>
@@ -993,10 +1257,14 @@ function TldrawNodeInspector({
             type="number"
             value={getNumber(
               node.data.sceneCount,
-              getDefaultSceneCount(getTargetDurationSec(node.data.targetDurationSec))
+              getDefaultChapterSceneCount(getTargetDurationSec(node.data.targetDurationSec))
             )}
             onChange={(event) =>
-              onDataChange(node.id, "sceneCount", clampNumber(Number(event.currentTarget.value), 1, 24))
+              onDataChange(
+                node.id,
+                "sceneCount",
+                clampNumber(Number(event.currentTarget.value), 1, 24)
+              )
             }
           />
         </label>
@@ -1013,7 +1281,11 @@ function TldrawNodeInspector({
               type="number"
               value={getNumber(node.data.durationSec, 6)}
               onChange={(event) =>
-                onDataChange(node.id, "durationSec", clampNumber(Number(event.currentTarget.value), 1, 30))
+                onDataChange(
+                  node.id,
+                  "durationSec",
+                  clampNumber(Number(event.currentTarget.value), 1, 30)
+                )
               }
             />
           </label>
@@ -1036,7 +1308,7 @@ function TldrawNodeInspector({
             />
           </label>
           <label>
-            插画模型
+            AI 模型
             <select
               name="imageModel"
               value={getSceneImageModel(node)}
@@ -1049,6 +1321,23 @@ function TldrawNodeInspector({
               ))}
             </select>
           </label>
+          <label>
+            风格
+            <select
+              name="imageStyle"
+              value={getSceneImageStyle(node)}
+              onChange={(event) => onDataChange(node.id, "imageStyle", event.currentTarget.value)}
+            >
+              {imageStyleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            类型
+          </label>
         </>
       ) : null}
 
@@ -1060,7 +1349,9 @@ function TldrawNodeInspector({
               <select
                 name="primaryVisualKind"
                 value={getString(node.data.primaryVisualKind, "auto")}
-                onChange={(event) => onDataChange(node.id, "primaryVisualKind", event.currentTarget.value)}
+                onChange={(event) =>
+                  onDataChange(node.id, "primaryVisualKind", event.currentTarget.value)
+                }
               >
                 <option value="auto">Auto</option>
                 <option value="text">Text</option>
@@ -1071,11 +1362,27 @@ function TldrawNodeInspector({
               </select>
             </label>
             <label>
+              Secondary visual
+              <select
+                name="secondaryVisualKind"
+                value={getString(node.data.secondaryVisualKind, "none")}
+                onChange={(event) =>
+                  onDataChange(node.id, "secondaryVisualKind", event.currentTarget.value)
+                }
+              >
+                <option value="none">None</option>
+                <option value="chart">Chart</option>
+                <option value="image">Image</option>
+              </select>
+            </label>
+            <label>
               Layout
               <select
                 name="layoutPreset"
                 value={getString(node.data.layoutPreset, "single")}
-                onChange={(event) => onDataChange(node.id, "layoutPreset", event.currentTarget.value)}
+                onChange={(event) =>
+                  onDataChange(node.id, "layoutPreset", event.currentTarget.value)
+                }
               >
                 <option value="single">Single</option>
                 <option value="split">Split</option>
@@ -1104,7 +1411,11 @@ function TldrawNodeInspector({
                 type="number"
                 value={getNumber(node.data.durationSec, 6)}
                 onChange={(event) =>
-                  onDataChange(node.id, "durationSec", clampNumber(Number(event.currentTarget.value), 1, 30))
+                  onDataChange(
+                    node.id,
+                    "durationSec",
+                    clampNumber(Number(event.currentTarget.value), 1, 30)
+                  )
                 }
               />
             </label>
@@ -1115,7 +1426,9 @@ function TldrawNodeInspector({
                 checked={getBoolean(node.data.includeCaption, true)}
                 name="includeCaption"
                 type="checkbox"
-                onChange={(event) => onDataChange(node.id, "includeCaption", event.currentTarget.checked)}
+                onChange={(event) =>
+                  onDataChange(node.id, "includeCaption", event.currentTarget.checked)
+                }
               />
               Caption
             </label>
@@ -1124,7 +1437,9 @@ function TldrawNodeInspector({
                 checked={getBoolean(node.data.includeVoice, true)}
                 name="includeVoice"
                 type="checkbox"
-                onChange={(event) => onDataChange(node.id, "includeVoice", event.currentTarget.checked)}
+                onChange={(event) =>
+                  onDataChange(node.id, "includeVoice", event.currentTarget.checked)
+                }
               />
               Voice
             </label>
@@ -1143,7 +1458,11 @@ function TldrawNodeInspector({
               type="range"
               value={getNumber(node.data.yPercent, 78)}
               onChange={(event) =>
-                onDataChange(node.id, "yPercent", clampNumber(Number(event.currentTarget.value), 0, 100))
+                onDataChange(
+                  node.id,
+                  "yPercent",
+                  clampNumber(Number(event.currentTarget.value), 0, 100)
+                )
               }
             />
             <output>{getNumber(node.data.yPercent, 78)}%</output>
@@ -1158,7 +1477,11 @@ function TldrawNodeInspector({
                 type="number"
                 value={getNumber(node.data.fontSize, 48)}
                 onChange={(event) =>
-                  onDataChange(node.id, "fontSize", clampNumber(Number(event.currentTarget.value), 20, 96))
+                  onDataChange(
+                    node.id,
+                    "fontSize",
+                    clampNumber(Number(event.currentTarget.value), 20, 96)
+                  )
                 }
               />
             </label>
@@ -1195,7 +1518,11 @@ function TldrawNodeInspector({
               type="range"
               value={getNumber(node.data.speed, 1)}
               onChange={(event) =>
-                onDataChange(node.id, "speed", clampNumber(Number(event.currentTarget.value), 0.5, 1.8))
+                onDataChange(
+                  node.id,
+                  "speed",
+                  clampNumber(Number(event.currentTarget.value), 0.5, 1.8)
+                )
               }
             />
             <output>{getNumber(node.data.speed, 1).toFixed(2)}x</output>
@@ -1210,7 +1537,11 @@ function TldrawNodeInspector({
               type="range"
               value={getNumber(node.data.volume, 1)}
               onChange={(event) =>
-                onDataChange(node.id, "volume", clampNumber(Number(event.currentTarget.value), 0, 2))
+                onDataChange(
+                  node.id,
+                  "volume",
+                  clampNumber(Number(event.currentTarget.value), 0, 2)
+                )
               }
             />
             <output>{Math.round(getNumber(node.data.volume, 1) * 100)}%</output>
@@ -1233,7 +1564,9 @@ function TldrawNodeInspector({
             <select
               name="d3Preset"
               value={d3Preset.id}
-              onChange={(event) => onDataPatch(node.id, d3VisualPresetPatch(event.currentTarget.value))}
+              onChange={(event) =>
+                onDataPatch(node.id, d3VisualPresetPatch(event.currentTarget.value))
+              }
             >
               {d3VisualPresets.map((preset) => (
                 <option key={preset.id} value={preset.id}>
@@ -1276,7 +1609,11 @@ function TldrawNodeInspector({
                 type="number"
                 value={getNumber(node.data.durationSec, 8)}
                 onChange={(event) =>
-                  onDataChange(node.id, "durationSec", clampNumber(Number(event.currentTarget.value), 1, 30))
+                  onDataChange(
+                    node.id,
+                    "durationSec",
+                    clampNumber(Number(event.currentTarget.value), 1, 30)
+                  )
                 }
               />
             </label>
@@ -1376,7 +1713,11 @@ function TldrawNodeInspector({
                 type="number"
                 value={getNumber(node.data.durationSec, 8)}
                 onChange={(event) =>
-                  onDataChange(node.id, "durationSec", clampNumber(Number(event.currentTarget.value), 1, 30))
+                  onDataChange(
+                    node.id,
+                    "durationSec",
+                    clampNumber(Number(event.currentTarget.value), 1, 30)
+                  )
                 }
               />
             </label>
@@ -1392,7 +1733,11 @@ function TldrawNodeInspector({
                 type="number"
                 value={getNumber(node.data.speed, 0.72)}
                 onChange={(event) =>
-                  onDataChange(node.id, "speed", clampNumber(Number(event.currentTarget.value), 0.1, 2))
+                  onDataChange(
+                    node.id,
+                    "speed",
+                    clampNumber(Number(event.currentTarget.value), 0.1, 2)
+                  )
                 }
               />
             </label>
@@ -1401,7 +1746,9 @@ function TldrawNodeInspector({
               <input
                 name="threeAccentColor"
                 value={getString(node.data.accentColor, "#e8c164")}
-                onChange={(event) => onDataChange(node.id, "accentColor", event.currentTarget.value)}
+                onChange={(event) =>
+                  onDataChange(node.id, "accentColor", event.currentTarget.value)
+                }
               />
             </label>
           </div>
@@ -1453,6 +1800,23 @@ function TldrawNodeInspector({
 
       {node.kind === "chart" ? (
         <>
+          <section className="tldraw-asset-summary">
+            <strong>Chart pipeline</strong>
+            <span>Display: {chartPipeline?.renderer ?? "AstroChart SVG"}</span>
+            <span>Calculation: {chartPipeline?.calculator ?? "Swiss Ephemeris"}</span>
+            {chartPipeline?.ephemeris ? <span>Ephemeris: {chartPipeline.ephemeris}</span> : null}
+            {chartPipeline?.zodiac ? <span>Zodiac: {chartPipeline.zodiac}</span> : null}
+            {chartPipeline?.houses ? <span>Houses: {chartPipeline.houses}</span> : null}
+            {chartPipeline?.timezone ? <span>Timezone: {chartPipeline.timezone}</span> : null}
+            {chartPipeline?.source ? <span>Data: {chartPipeline.source}</span> : null}
+          </section>
+          <ChartHighlightChildrenEditor
+            chartNode={node}
+            highlights={chartHighlightNodes}
+            onAdd={onChartHighlightAdd}
+            onDelete={onChartHighlightDelete}
+            onSelect={onChartHighlightSelect}
+          />
           <div className="tldraw-inspector-grid">
             <label>
               Birth date
@@ -1489,16 +1853,87 @@ function TldrawNodeInspector({
               />
             </label>
             <label>
+              IANA zone
+              <input
+                name="timezone"
+                value={getString(node.data.timezone, defaultChartBirthData.timezone)}
+                onChange={(event) => onDataChange(node.id, "timezone", event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <div className="tldraw-inspector-grid">
+            <label>
               House
               <select
                 name="houseSystem"
                 value={getString(node.data.houseSystem, defaultChartBirthData.houseSystem)}
-                onChange={(event) => onDataChange(node.id, "houseSystem", event.currentTarget.value)}
+                onChange={(event) =>
+                  onDataChange(node.id, "houseSystem", event.currentTarget.value)
+                }
               >
-                <option value="equal">Equal</option>
+                {chartHouseSystemOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Zodiac
+              <select
+                name="zodiacMode"
+                value={getString(node.data.zodiacMode, defaultChartBirthData.zodiacMode)}
+                onChange={(event) =>
+                  onDataChange(node.id, "zodiacMode", event.currentTarget.value)
+                }
+              >
+                <option value="tropical">Tropical</option>
+                <option value="sidereal">Sidereal</option>
               </select>
             </label>
           </div>
+          <div className="tldraw-inspector-grid">
+            <label>
+              Ayanamsa
+              <select
+                name="siderealAyanamsa"
+                value={getString(node.data.siderealAyanamsa, defaultChartBirthData.siderealAyanamsa)}
+                onChange={(event) =>
+                  onDataChange(node.id, "siderealAyanamsa", event.currentTarget.value)
+                }
+              >
+                {chartAyanamsaOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Planet set
+              <select
+                name="planetSet"
+                value={getString(node.data.planetSet, defaultChartBirthData.planetSet)}
+                onChange={(event) => onDataChange(node.id, "planetSet", event.currentTarget.value)}
+              >
+                <option value="classical">Classical</option>
+                <option value="modern">Modern</option>
+                <option value="extended">Extended</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Lunar node
+            <select
+              name="nodeType"
+              value={getString(node.data.nodeType, defaultChartBirthData.nodeType)}
+              onChange={(event) => onDataChange(node.id, "nodeType", event.currentTarget.value)}
+            >
+              <option value="mean">Mean Node</option>
+              <option value="true">True Node</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
           <label>
             Place
             <input
@@ -1517,7 +1952,9 @@ function TldrawNodeInspector({
                 step={0.0001}
                 type="number"
                 value={getNumber(node.data.latitude, defaultChartBirthData.latitude)}
-                onChange={(event) => onDataChange(node.id, "latitude", Number(event.currentTarget.value))}
+                onChange={(event) =>
+                  onDataChange(node.id, "latitude", Number(event.currentTarget.value))
+                }
               />
             </label>
             <label>
@@ -1529,7 +1966,9 @@ function TldrawNodeInspector({
                 step={0.0001}
                 type="number"
                 value={getNumber(node.data.longitude, defaultChartBirthData.longitude)}
-                onChange={(event) => onDataChange(node.id, "longitude", Number(event.currentTarget.value))}
+                onChange={(event) =>
+                  onDataChange(node.id, "longitude", Number(event.currentTarget.value))
+                }
               />
             </label>
           </div>
@@ -1544,6 +1983,14 @@ function TldrawNodeInspector({
         </>
       ) : null}
 
+      {node.kind === "chart-highlight" ? (
+        <ChartHighlightNodeEditor
+          chartNode={chartHighlightSourceNode ?? node}
+          highlight={node}
+          onChange={onChartHighlightChange}
+        />
+      ) : null}
+
       {node.kind === "preview" ? (
         <div className="tldraw-inspector-grid">
           <label>
@@ -1554,7 +2001,11 @@ function TldrawNodeInspector({
               type="number"
               value={getNumber(node.data.previewFrame, defaultPreviewFrame)}
               onChange={(event) =>
-                onDataChange(node.id, "previewFrame", Math.max(0, Number(event.currentTarget.value)))
+                onDataChange(
+                  node.id,
+                  "previewFrame",
+                  Math.max(0, Number(event.currentTarget.value))
+                )
               }
             />
           </label>
@@ -1588,10 +2039,33 @@ function TldrawNodeInspector({
       ) : null}
 
       {assetUrl ? (
-        <section className="tldraw-asset-summary">
-          <strong>Asset</strong>
-          <span>{assetUrl}</span>
-        </section>
+        node.kind === "export" ? (
+          <section className="tldraw-asset-summary">
+            <strong>导出视频</strong>
+            <div className="export-video-preview">
+              <video controls preload="metadata" src={assetUrl} />
+            </div>
+            <div className="export-asset-actions">
+              <a href={assetUrl} download>
+                下载视频
+              </a>
+              <a href={assetUrl} rel="noreferrer" target="_blank">
+                新窗口打开
+              </a>
+            </div>
+            {assetPath ? (
+              <div className="export-asset-path">
+                <strong>本地文件位置</strong>
+                <code>{assetPath}</code>
+              </div>
+            ) : null}
+          </section>
+        ) : (
+          <section className="tldraw-asset-summary">
+            <strong>Asset</strong>
+            <span>{assetUrl}</span>
+          </section>
+        )
       ) : null}
 
       <div className="tldraw-inspector-grid">
@@ -1669,13 +2143,16 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
   if (node.kind === "script" || node.kind === "storyboard") {
     const targetDurationSec = getTargetDurationSec(node.data.targetDurationSec);
 
-    if (node.kind === "script" && targetDurationSec > 60) {
+    if (node.kind === "script" && targetDurationSec > storyboardStructureThresholdSec) {
       return {
         type: "create-structure-node",
         input: {
           scriptText: getAiPromptValue(node),
           targetDurationSec,
-          chapterCount: getNumber(node.data.chapterCount, getDefaultChapterCount(targetDurationSec)),
+          chapterCount: getNumber(
+            node.data.chapterCount,
+            getDefaultChapterCount(targetDurationSec)
+          ),
           model: getNodeAiModel(node)
         }
       };
@@ -1685,7 +2162,7 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       type: "generate-storyboard",
       input: {
         scriptText: getAiPromptValue(node),
-        sceneCount: getNumber(node.data.sceneCount, 5),
+        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
         model: getNodeAiModel(node),
         targetDurationSec
       }
@@ -1714,18 +2191,22 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
       input: {
         scriptText: getAiPromptValue(node),
         targetDurationSec,
-        sceneCount: getNumber(node.data.sceneCount, getDefaultSceneCount(targetDurationSec)),
+        sceneCount: getNumber(node.data.sceneCount, getDefaultChapterSceneCount(targetDurationSec)),
         model: getNodeAiModel(node)
       }
     };
   }
 
   if (node.kind === "image") {
+    const imageModel = getNodeAiModel(node);
+    const imageStyle = getNodeImageStyle(node);
+
     return {
       type: "generate-image",
       input: {
-        prompt: getAiPromptValue(node) || "simple educational astrology line drawing",
-        model: getNodeAiModel(node)
+        prompt: getAiPromptValue(node) || "简洁的占星教学插画，清晰表达核心概念，适合短视频画面",
+        model: imageModel,
+        imageStyle
       }
     };
   }
@@ -1738,7 +2219,25 @@ function getNodeJobRequest(node: CanvasNode): NodeJobRequest | null {
     return { type: "generate-chart", input: getChartJobInput(node) };
   }
 
-  if (node.kind === "d3" || node.kind === "three") {
+  if (node.kind === "d3") {
+    const title = getString(node.data.title, "D3 Diagram");
+    const description = getString(node.data.description, title);
+
+    return {
+      type: "generate-d3",
+      input: {
+        prompt: getAiPromptValue(node) || description,
+        title,
+        description,
+        narration: getString(node.data.narration, description),
+        diagram: getString(node.data.diagram, "timeline"),
+        durationSec: getNumber(node.data.durationSec, 8),
+        model: getNodeAiModel(node)
+      }
+    };
+  }
+
+  if (node.kind === "three") {
     return { type: "export-visual-asset", input: {} };
   }
 
@@ -1769,13 +2268,75 @@ function getChartJobInput(node: CanvasNode) {
       node.data.timezoneOffsetMinutes,
       defaultChartBirthData.timezoneOffsetMinutes
     ),
+    timezone: getString(node.data.timezone, defaultChartBirthData.timezone),
     latitude: getNumber(node.data.latitude, defaultChartBirthData.latitude),
     longitude: getNumber(node.data.longitude, defaultChartBirthData.longitude),
     placeName: getString(node.data.placeName, defaultChartBirthData.placeName),
     houseSystem: getString(node.data.houseSystem, defaultChartBirthData.houseSystem),
+    zodiacMode: getString(node.data.zodiacMode, defaultChartBirthData.zodiacMode),
+    siderealAyanamsa: getString(
+      node.data.siderealAyanamsa,
+      defaultChartBirthData.siderealAyanamsa
+    ),
+    planetSet: getString(node.data.planetSet, defaultChartBirthData.planetSet),
+    nodeType: getString(node.data.nodeType, defaultChartBirthData.nodeType),
     chartType: getString(node.data.chartType, defaultChartBirthData.chartType),
     highlight: getString(node.data.highlight, defaultChartBirthData.highlight)
   };
+}
+
+function getChartPipelineSummary(node: CanvasNode) {
+  const calculation = recordData(node.data.calculation);
+  const renderer = getString(node.data.renderer, "AstroChart SVG");
+  const calculator = getString(
+    node.data.calculator,
+    getString(calculation?.engine, "Swiss Ephemeris")
+  );
+  const ephemeris = getChartEphemerisLabel(getString(calculation?.ephemeris, ""));
+  const zodiac = getChartZodiacLabel(calculation);
+  const houses = getString(calculation?.houseSystem, "");
+  const timezone = getString(calculation?.timezone, "");
+  const source = getChartSourceLabel(getString(node.data.source, ""));
+
+  return {
+    renderer,
+    calculator,
+    ephemeris,
+    zodiac,
+    houses,
+    timezone,
+    source
+  };
+}
+
+function getChartZodiacLabel(calculation: Record<string, unknown> | undefined) {
+  const zodiacMode = getString(calculation?.zodiacMode, "");
+  const siderealAyanamsa = getString(calculation?.siderealAyanamsa, "");
+
+  if (zodiacMode === "sidereal") {
+    return siderealAyanamsa ? `Sidereal / ${siderealAyanamsa}` : "Sidereal";
+  }
+
+  return zodiacMode === "tropical" ? "Tropical" : "";
+}
+
+function getChartEphemerisLabel(ephemeris: string) {
+  const labels: Record<string, string> = {
+    "swiss-files": "Swiss Ephemeris files",
+    moshier: "Moshier fallback"
+  };
+
+  return labels[ephemeris] ?? ephemeris;
+}
+
+function getChartSourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    "provided-data": "provided chart data",
+    "calculated-birth": "birth input",
+    sample: "sample data"
+  };
+
+  return labels[source] ?? source;
 }
 
 function selectZeroFlowNode(editor: Editor, nodeId: string) {
@@ -1833,6 +2394,15 @@ function getGeneratedNodeSelection(output: Record<string, unknown> | undefined) 
   return undefined;
 }
 
+function isAbortError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 function getString(value: unknown, fallback: string) {
   return typeof value === "string" && value.trim().length > 0 ? value : fallback;
 }
@@ -1850,7 +2420,9 @@ function getNodeRunLabel(node: CanvasNode) {
     case "topic":
       return "Generate script";
     case "script":
-      return getTargetDurationSec(node.data.targetDurationSec) > 60 ? "生成结构" : "Generate storyboard";
+      return getTargetDurationSec(node.data.targetDurationSec) > 60
+        ? "生成结构"
+        : "Generate storyboard";
     case "structure":
       return "生成章节";
     case "chapter":
@@ -1866,6 +2438,7 @@ function getNodeRunLabel(node: CanvasNode) {
     case "image":
       return "Generate image";
     case "d3":
+      return "生成 D3 图表";
     case "three":
       return "Export visual";
     case "composition":

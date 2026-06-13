@@ -33,6 +33,19 @@ export type ProjectAsset = {
   updatedAt: string;
 };
 
+export type ImagePromptPresetKind = "style" | "type";
+
+export type ImagePromptPreset = {
+  id: string;
+  kind: ImagePromptPresetKind;
+  target: string;
+  label: string;
+  enabled: boolean;
+  promptSuffix: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type ProjectAssetRefRecord = ProjectAssetRef & {
   id: string;
   projectId: string;
@@ -46,6 +59,7 @@ type DbStore = {
   projectAssets: ProjectAsset[];
   projectAssetRefs: ProjectAssetRefRecord[];
   jobs: Job[];
+  imagePromptPresets: ImagePromptPreset[];
 };
 
 export function ensureSeedData() {
@@ -359,6 +373,64 @@ export function addProjectAssetRef(
   });
 }
 
+export function listImagePromptPresets() {
+  ensureSeedData();
+  return sortItems(readStore().imagePromptPresets).map(clone);
+}
+
+export function upsertImagePromptPresets(
+  input: Array<{
+    id: string;
+    kind: ImagePromptPresetKind;
+    target: string;
+    label: string;
+    enabled?: boolean;
+    promptSuffix?: string;
+  }>
+) {
+  ensureSeedData();
+  const now = new Date().toISOString();
+
+  return mutateStore((store) => {
+    const nextPresets = input.map((preset) => {
+      const existing = store.imagePromptPresets.find((item) => item.id === preset.id);
+      return normalizeImagePromptPreset({
+        ...existing,
+        ...preset,
+        enabled: preset.enabled ?? existing?.enabled ?? false,
+        promptSuffix: preset.promptSuffix ?? existing?.promptSuffix ?? "",
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      });
+    });
+
+    for (const preset of nextPresets) {
+      upsertById(store.imagePromptPresets, preset);
+    }
+
+    return nextPresets.map(clone);
+  });
+}
+
+export function getImagePromptPresetAdditions(input: {
+  imageStyle?: string;
+}) {
+  ensureSeedData();
+  const ids = new Set([`style:${input.imageStyle ?? ""}`].filter((id) => !id.endsWith(":")));
+
+  return readStore()
+    .imagePromptPresets.filter(
+      (preset) => ids.has(preset.id) && preset.enabled && preset.promptSuffix.trim().length > 0
+    )
+    .map((preset) => ({
+      id: preset.id,
+      kind: preset.kind,
+      target: preset.target,
+      label: preset.label,
+      promptSuffix: preset.promptSuffix.trim()
+    }));
+}
+
 export function listJobs(projectId?: string) {
   ensureSeedData();
   const jobs = projectId
@@ -564,7 +636,8 @@ function emptyStore(): DbStore {
     libraryAssets: [],
     projectAssets: [],
     projectAssetRefs: [],
-    jobs: []
+    jobs: [],
+    imagePromptPresets: []
   };
 }
 
@@ -578,7 +651,28 @@ function normalizeStore(store: Partial<DbStore>): DbStore {
       metadata: asset.metadata ?? {}
     })) as ProjectAsset[],
     projectAssetRefs: (store.projectAssetRefs ?? []) as ProjectAssetRefRecord[],
-    jobs: (store.jobs ?? []).map((job) => jobSchema.parse(job))
+    jobs: (store.jobs ?? []).map((job) => jobSchema.parse(job)),
+    imagePromptPresets: (store.imagePromptPresets ?? []).map(normalizeImagePromptPreset)
+  };
+}
+
+function normalizeImagePromptPreset(preset: Partial<ImagePromptPreset>): ImagePromptPreset {
+  const now = new Date().toISOString();
+  const id = typeof preset.id === "string" ? preset.id : "";
+  const kind = preset.kind === "type" ? "type" : "style";
+  const target = typeof preset.target === "string" ? preset.target : id.split(":")[1] ?? "";
+  const label = typeof preset.label === "string" ? preset.label : target;
+  const promptSuffix = typeof preset.promptSuffix === "string" ? preset.promptSuffix : "";
+
+  return {
+    id,
+    kind,
+    target,
+    label,
+    enabled: Boolean(preset.enabled),
+    promptSuffix,
+    createdAt: typeof preset.createdAt === "string" ? preset.createdAt : now,
+    updatedAt: typeof preset.updatedAt === "string" ? preset.updatedAt : now
   };
 }
 

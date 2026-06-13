@@ -1,4 +1,11 @@
-import type { GeneratedScript, GeneratedStoryboard, ImageProvider, LlmProvider, TtsProvider } from "./types";
+import type {
+  D3DiagramKind,
+  GeneratedScript,
+  GeneratedStoryboard,
+  ImageProvider,
+  LlmProvider,
+  TtsProvider
+} from "./types";
 
 export function createMockLlmProvider(): LlmProvider {
   return {
@@ -6,7 +13,7 @@ export function createMockLlmProvider(): LlmProvider {
       const targetDurationSec = input.targetDurationSec ?? 60;
       const topic = normalizeScriptTopic(input.topic || "占星基础知识");
       const mockScripts: Record<string, { hook: string; scriptText: string }> = {
-        "上升星座": {
+        上升星座: {
           hook: "为什么你觉得自己有时候像两个人？其实答案藏在你出生时东方地平线上升起的那颗星座里。",
           scriptText: [
             `你有没有过这样的感觉：明明自己是个内向的人，但在某些场合却变得特别外向、健谈？`,
@@ -55,7 +62,9 @@ export function createMockLlmProvider(): LlmProvider {
     async generateStoryboard(input) {
       const count = Math.max(1, Math.min(12, input.sceneCount));
       const duration = Math.max(4, Math.round((input.targetDurationSec ?? 60) / count));
-      const paragraphs = input.scriptText.split("\n").filter(line => line.trim().length > 0 && !line.startsWith("比如你的太阳"));
+      const paragraphs = input.scriptText
+        .split("\n")
+        .filter((line) => line.trim().length > 0 && !line.startsWith("比如你的太阳"));
       const paragraphCount = paragraphs.length;
       const firstLine = paragraphs[0] ?? input.scriptText.slice(0, 40);
       const inferredTopic = firstLine.replace(/[「」]/g, "").slice(0, 20);
@@ -69,24 +78,32 @@ export function createMockLlmProvider(): LlmProvider {
               : "用画面配合口播讲解核心概念",
         narration:
           index === 0
-            ? paragraphs[0]?.slice(0, 100) ?? input.scriptText.slice(0, 80)
+            ? (paragraphs[0]?.slice(0, 100) ?? input.scriptText.slice(0, 80))
             : index === count - 1
-              ? (paragraphs[paragraphCount - 1] ?? "这就是今天分享的内容，希望对你了解占星有帮助。我们下期见。").slice(0, 100)
-              : (paragraphs[Math.min(index, paragraphCount - 1)] ?? `继续深入讲解这个概念。`).slice(0, 100),
+              ? (
+                  paragraphs[paragraphCount - 1] ??
+                  "这就是今天分享的内容，希望对你了解占星有帮助。我们下期见。"
+                ).slice(0, 100)
+              : (paragraphs[Math.min(index, paragraphCount - 1)] ?? `继续深入讲解这个概念。`).slice(
+                  0,
+                  100
+                ),
         sceneType: index === 1 ? "astro-chart" : index === 2 ? "sketch" : "text",
         durationSec: duration,
-        visualPrompt: index === 0
-          ? "clean educational title card, astrology theme, warm earth tones, minimalist"
-          : index === 1
-            ? "astrology natal chart wheel, subtle glowing planets, educational annotation style"
-            : index === 2
-              ? "simple line art illustration, educational astrology concept, warm beige background"
-              : "clean text overlay with key points, soft warm background, elegant serif typography",
-        caption: index === 0
-          ? `「${inferredTopic}」到底是什么？`
-          : index === count - 1
-            ? "总结：记住这三点"
-            : `${index + 1}/${count - 1} · 核心讲解`
+        visualPrompt:
+          index === 0
+            ? "简洁的占星教学标题画面，暖色调，主体清晰，适合短视频开场"
+            : index === 1
+              ? "占星本命盘圆盘画面，行星位置清晰，带轻微发光和教学标注"
+              : index === 2
+                ? "简洁线稿插画，表现占星概念，暖米色背景，画面干净"
+                : "干净的重点文字画面，柔和暖色背景，优雅排版，适合教学视频",
+        caption:
+          index === 0
+            ? `「${inferredTopic}」到底是什么？`
+            : index === count - 1
+              ? "总结：记住这三点"
+              : `${index + 1}/${count - 1} · 核心讲解`
       }));
 
       return {
@@ -94,22 +111,31 @@ export function createMockLlmProvider(): LlmProvider {
         usedMock: true,
         data: { scenes }
       };
+    },
+    async generateD3Contract(input) {
+      const title = input.title || "D3 Diagram";
+      const diagram = input.diagram ?? inferD3Diagram(input.prompt);
+
+      return {
+        provider: "mock-llm",
+        usedMock: true,
+        data: {
+          title,
+          description: input.description || input.prompt,
+          narration: input.narration || input.prompt,
+          durationSec: input.durationSec ?? 8,
+          diagram,
+          visualPreset: diagram,
+          data: mockD3Data(diagram, title)
+        }
+      };
     }
   };
 }
 
 function normalizeScriptTopic(value: string) {
   const trimmed = value.trim();
-  const cutPhrases = [
-    "我要制作",
-    "我想制作",
-    "请你",
-    "帮我",
-    "要求",
-    "，要求",
-    "。要求",
-    "\n"
-  ];
+  const cutPhrases = ["我要制作", "我想制作", "请你", "帮我", "要求", "，要求", "。要求", "\n"];
   const cutIndex = cutPhrases
     .map((phrase) => trimmed.indexOf(phrase))
     .filter((index) => index > 0)
@@ -121,6 +147,63 @@ function normalizeScriptTopic(value: string) {
   return topic || trimmed.slice(0, 40) || "占星基础知识";
 }
 
+function inferD3Diagram(prompt: string): D3DiagramKind {
+  const normalized = prompt.toLowerCase();
+
+  if (/关系|关联|连接|link|relationship|network|map/.test(normalized)) {
+    return "relationship";
+  }
+
+  if (/树|层级|结构|分支|tree|hierarchy/.test(normalized)) {
+    return "tree";
+  }
+
+  if (/比例|分布|权重|对比|distribution|bar|compare/.test(normalized)) {
+    return "distribution";
+  }
+
+  return "timeline";
+}
+
+function mockD3Data(diagram: D3DiagramKind, title: string) {
+  if (diagram === "relationship") {
+    return {
+      nodes: ["Concept", title, "Evidence", "Practice"],
+      links: [
+        ["Concept", title],
+        [title, "Evidence"],
+        [title, "Practice"]
+      ]
+    };
+  }
+
+  if (diagram === "tree") {
+    return {
+      root: title,
+      children: ["Concept", "Evidence", "Practice", "Takeaway"]
+    };
+  }
+
+  if (diagram === "distribution") {
+    return {
+      values: [
+        { label: "Concept", value: 34 },
+        { label: title, value: 42 },
+        { label: "Practice", value: 24 }
+      ]
+    };
+  }
+
+  return {
+    events: [
+      { label: "Concept", value: 0 },
+      { label: title, value: 1 },
+      { label: "Evidence", value: 2 },
+      { label: "Practice", value: 3 }
+    ]
+  };
+}
+
 export function createMockImageProvider(): ImageProvider {
   return {
     async generateImage(input) {
@@ -129,6 +212,8 @@ export function createMockImageProvider(): ImageProvider {
         usedMock: true,
         data: {
           prompt: input.prompt,
+          model: input.model,
+          size: input.size,
           assetPath: input.outputPath
         }
       };
@@ -145,7 +230,8 @@ export function createMockTtsProvider(): TtsProvider {
         data: {
           audioPath: input.outputPath,
           manifestPath: `${input.outputPath}.runninghub/manifest.json`,
-          stdout: "Mock TTS skipped because RUNNINGHUB_API_KEY or reference audio is not configured.",
+          stdout:
+            "Mock TTS skipped because RUNNINGHUB_API_KEY or reference audio is not configured.",
           stderr: ""
         }
       };
